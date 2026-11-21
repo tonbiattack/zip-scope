@@ -112,14 +112,20 @@ ZIP 一覧で右クリックするとメニューが開きます。
 ### インストール
 
 ```powershell
-# 1. DLL をビルド（MSVC と Windows SDK が必要）
+# 1. ビルド（MSVC と Windows SDK が必要）
+wails build -platform windows/amd64
 shell\build.cmd
 
-# 2. 登録（管理者権限は不要）
+# 2. インストール（管理者権限は不要）
 shell\install.cmd
 ```
 
-登録は `HKEY_CURRENT_USER\Software\Classes` 配下（ユーザー単位）に行うため、管理者権限は不要です。
+`install.cmd` は以下を行います。
+
+- `ZipScope.exe` と `ZipScopeShell.dll` を `%LOCALAPPDATA%\Programs\ZipScope` に配置
+- App Paths を登録（拡張子がビューアを見つけられるようにする）
+- COM を登録（`HKCU\Software\Classes` 配下、ユーザー単位）
+
 アンインストールは `shell\uninstall.cmd` を実行します。
 
 サムネイルがすぐに反映されない場合は、サムネイルキャッシュを消してからエクスプローラーを再起動してください。
@@ -148,7 +154,7 @@ Windows 10 では動作しません。MVP では両方の OS で動く `IContext
 
 ### 検証
 
-`shell/` には3つの検証ツールがあります。いずれも実際の Shell API を通すので、
+`shell/` には4つの検証ツールがあります。いずれも実際の Shell API を通すので、
 登録ミスやプロバイダの不具合をエクスプローラーを開く前に検出できます。
 
 ```powershell
@@ -160,7 +166,22 @@ build\shell\thumbtest.exe path\to\book.zip
 
 # 右クリックメニュー（Shell 経由でメニュー項目を列挙）
 build\shell\menutest.exe path\to\book.zip
+
+# 右クリックメニューからの起動（実際に ZipScope.exe が起動するか）
+build\shell\launchtest.exe path\to\book.zip
 ```
+
+### ビューアの場所の解決
+
+拡張子は次の順で `ZipScope.exe` を探します。
+
+1. DLL と同じフォルダ（インストール時の配置）
+2. 隣の `bin\`（開発中のチェックアウト）
+3. `%LOCALAPPDATA%\Programs\ZipScope`
+4. App Paths レジストリ（`install.cmd` が登録）
+5. `PATH`
+
+見つからない場合はダイアログで通知します（無言で失敗しません）。
 
 ## キャッシュと保存場所
 

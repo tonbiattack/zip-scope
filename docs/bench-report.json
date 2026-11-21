@@ -1,0 +1,78 @@
+{
+  "generated": "2026-11-21T09:12:40.590955Z",
+  "spec": {
+    "Archives": 1000,
+    "ImagesPerArchive": 20,
+    "Width": 1200,
+    "Height": 900,
+    "Quality": 85,
+    "Seed": 1
+  },
+  "corpusBytes": 6335065835,
+  "archiveCount": 1000,
+  "targets": [
+    {
+      "name": "cold archive index (central directory)",
+      "goal": 250000000,
+      "actual": 1177000,
+      "met": true,
+      "samples": 30
+    },
+    {
+      "name": "warm archive index (cached metadata)",
+      "goal": 50000000,
+      "actual": 564700,
+      "met": true,
+      "samples": 30
+    },
+    {
+      "name": "cold thumbnail (decode+resize+encode)",
+      "goal": 1000000000,
+      "actual": 462578400,
+      "met": true,
+      "samples": 30
+    },
+    {
+      "name": "warm thumbnail (cache hit)",
+      "goal": 200000000,
+      "actual": 0,
+      "met": true,
+      "samples": 30
+    },
+    {
+      "name": "prefetched full image switch",
+      "goal": 100000000,
+      "actual": 0,
+      "met": true,
+      "samples": 30
+    },
+    {
+      "name": "cold full image (read+validate)",
+      "goal": 1000000000,
+      "actual": 2009800,
+      "met": true,
+      "samples": 30
+    },
+    {
+      "name": "full scan of 1000 archives",
+      "goal": 120000000000,
+      "actual": 1062502300,
+      "met": true,
+      "samples": 3
+    }
+  ],
+  "notes": [
+    "Corpus images are synthetic gradients, not photographs; real JPEGs of 1-5 MB decode slower.",
+    "Cold measurements clear the whole cache before each round, so they include SQLite writes.",
+    "Scan timing waits for the asynchronous walk to index every archive."
+  ],
+  "extra": {
+    "archivesIndexed": "1000",
+    "corpusGeneration": "1m37.342s",
+    "goVersion": "go1.27.4",
+    "heapAfterIndexing": "7.7 MB",
+    "heapBeforeIndexing": "7.5 MB",
+    "numCPU": "20",
+    "os": "windows/amd64"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "ZipScope",
+  "outputfilename": "ZipScope.exe",
+  "frontend:dir": "frontend",
+  "frontend:install": "npm ci",
+  "frontend:build": "npm run build:only",
+  "frontend:dev:watcher": "npm run dev",
+  "author": {
+    "name": "tonbiattack",
+    "email": ""
+  },
+  "info": {
+    "companyName": "tonbiattack",
+    "productName": "ZipScope",
+    "productVersion": "0.1.0",
+    "copyright": "",
+    "comments": "ZIP/CBZ image viewer for Windows"
+  },
+  "nsisType": "multiple",
+  "obfuscated": false
+}

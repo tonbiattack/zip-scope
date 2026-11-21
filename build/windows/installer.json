@@ -1,0 +1,12 @@
+{
+  "version": 3,
+  "artifactName": "ZipScope-${version}-windows-${arch}.${ext}",
+  "files": ["ZipScope.exe"],
+  "directories": {
+    "output": "build/release"
+  },
+  "win": {
+    "target": ["zip"],
+    "icon": "build/appicon.png"
+  }
+}

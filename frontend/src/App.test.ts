@@ -138,6 +138,7 @@ function installFake(opts: { settings?: Settings; archives?: ArchiveSummary[] } 
     DeleteArchiveToRecycleBin: vi.fn(async () => ({ source: '', recycleBin: true, archiveId: 0 })),
     RefreshArchive: vi.fn(async () => archives[0]),
     PruneMissingArchives: vi.fn(async () => 0),
+    StartupTarget: vi.fn(async () => ''),
   }
 
   ;(window as unknown as { go: unknown }).go = { app: { App: api } }
@@ -392,5 +393,33 @@ describe('App', () => {
     await flushPromises()
 
     expect(w.findAll('.row')).toHaveLength(0)
+  })
+
+  it('opens the archive passed on the command line', async () => {
+    // The Explorer context menu launches the app with the archive path.
+    const fake = installFake()
+    const rt = installRuntime()
+    const target = 'C:\\pics\\book.zip'
+    ;(fake.api as { StartupTarget: unknown }).StartupTarget = vi.fn(async () => target)
+
+    mount(App)
+    await flushPromises()
+
+    // The scan of the containing folder reports the archive.
+    rt.emit('scan:file', { archive: makeArchive({ id: 1, path: target }) })
+    await flushPromises()
+    await new Promise((r) => setTimeout(r, 250))
+    await flushPromises()
+
+    expect(fake.calls).toContain('StartScan:C:\\pics')
+    expect(fake.calls).toContain('GetArchiveEntries:1')
+  })
+
+  it('falls back to the restored session when no target is given', async () => {
+    const fake = installFake({ settings: makeSettings({ root: 'C:\\saved' }) })
+    installRuntime()
+    mount(App)
+    await flushPromises()
+    expect(fake.calls).toContain('StartScan:C:\\saved')
   })
 })

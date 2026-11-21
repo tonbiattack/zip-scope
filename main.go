@@ -5,6 +5,8 @@ import (
 	"embed"
 	"log"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -26,6 +28,12 @@ func main() {
 	application, err := app.New(dir)
 	if err != nil {
 		log.Fatalf("zipscope: %v", err)
+	}
+
+	// A path on the command line comes from the Explorer context menu or from
+	// "Open with". It selects that archive instead of restoring the last one.
+	if target := archiveArg(os.Args[1:]); target != "" {
+		application.SetStartupTarget(target)
 	}
 
 	cfg := application.GetSettings()
@@ -56,6 +64,29 @@ func main() {
 		log.Printf("zipscope: %v", err)
 		os.Exit(1)
 	}
+}
+
+// archiveArg returns the first argument that looks like a ZIP/CBZ path. Flags
+// and anything else are ignored so an unexpected argument cannot make the app
+// try to open an arbitrary file.
+func archiveArg(args []string) string {
+	for _, a := range args {
+		if a == "" || strings.HasPrefix(a, "-") {
+			continue
+		}
+		switch strings.ToLower(filepath.Ext(a)) {
+		case ".zip", ".cbz":
+			abs, err := filepath.Abs(a)
+			if err != nil {
+				continue
+			}
+			if _, err := os.Stat(abs); err != nil {
+				continue
+			}
+			return abs
+		}
+	}
+	return ""
 }
 
 // dataDir resolves %LOCALAPPDATA%/ZipScope.

@@ -127,6 +127,10 @@ export const backend = {
   pruneMissing(): Promise<number> {
     return api().PruneMissingArchives()
   },
+
+  startupTarget(): Promise<string> {
+    return api().StartupTarget()
+  },
 }
 
 // Image URLs are opaque identifiers, never paths. The Go handler validates the

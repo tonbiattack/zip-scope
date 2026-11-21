@@ -102,8 +102,16 @@ export function RevealInExplorer(arg1) {
   return window['go']['app']['App']['RevealInExplorer'](arg1);
 }
 
+export function SetStartupTarget(arg1) {
+  return window['go']['app']['App']['SetStartupTarget'](arg1);
+}
+
 export function StartScan(arg1) {
   return window['go']['app']['App']['StartScan'](arg1);
+}
+
+export function StartupTarget() {
+  return window['go']['app']['App']['StartupTarget']();
 }
 
 export function ThumbSizeOptions() {

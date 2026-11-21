@@ -100,6 +100,68 @@ ZIP 一覧で右クリックするとメニューが開きます。
 - LRU 整理 / サムネイル削除 / すべて消去
 - 現在の使用量と先読みの統計
 
+## エクスプローラー統合
+
+`shell/` に COM のインプロセス DLL（`ZipScopeShell.dll`）があり、エクスプローラーに2つの機能を追加します。
+
+| 機能 | 動作 |
+| --- | --- |
+| サムネイル | ZIP / CBZ のアイコンが、中の最初の画像（自然順先頭）になる |
+| 右クリック | 「ZipScopeで開く」でその ZIP を ZipScope で開く |
+
+### インストール
+
+```powershell
+# 1. DLL をビルド（MSVC と Windows SDK が必要）
+shell\build.cmd
+
+# 2. 登録（管理者権限は不要）
+shell\install.cmd
+```
+
+登録は `HKEY_CURRENT_USER\Software\Classes` 配下（ユーザー単位）に行うため、管理者権限は不要です。
+アンインストールは `shell\uninstall.cmd` を実行します。
+
+サムネイルがすぐに反映されない場合は、サムネイルキャッシュを消してからエクスプローラーを再起動してください。
+
+```powershell
+Get-ChildItem "$env:LOCALAPPDATA\Microsoft\Windows\Explorer" -Filter "thumbcache_*.db" | Remove-Item -Force
+taskkill /f /im explorer.exe; start explorer.exe
+```
+
+### 右クリックメニューの表示場所
+
+Windows 11 の新しい右クリックメニューは、従来の `IContextMenu` ハンドラを直接表示しません。
+**「その他のオプションを表示」**（または `Shift+F10`）を開くと「ZipScopeで開く」が表示されます。
+
+新しいメニューに直接出すには `IExplorerCommand` の実装が必要ですが、こちらは Windows 11 専用で
+Windows 10 では動作しません。MVP では両方の OS で動く `IContextMenu` を採用しています。
+
+### 安全性
+
+エクスプローラーはこの DLL を `explorer.exe` のプロセス内に読み込みます。そのため:
+
+- すべてのエントリポイントを `try/catch` で囲み、例外を COM 境界の外に出しません
+- 展開サイズ・画素数・アーカイブサイズに上限を設けています（アプリ本体より厳しめ）
+- 壊れた ZIP や画像以外のエントリは、例外ではなく「サムネイルなし」として扱います
+- 右クリックメニューは ZIP / CBZ 以外では自分自身を無効化します
+
+### 検証
+
+`shell/` には3つの検証ツールがあります。いずれも実際の Shell API を通すので、
+登録ミスやプロバイダの不具合をエクスプローラーを開く前に検出できます。
+
+```powershell
+# ZIP リーダーとデコーダ（DLL と同じソースをリンク）
+shell\test.cmd path\to\book.zip
+
+# サムネイルプロバイダ（Shell 経由でサムネイルを取得）
+build\shell\thumbtest.exe path\to\book.zip
+
+# 右クリックメニュー（Shell 経由でメニュー項目を列挙）
+build\shell\menutest.exe path\to\book.zip
+```
+
 ## キャッシュと保存場所
 
 すべて `%LOCALAPPDATA%\ZipScope` 配下です。
@@ -209,6 +271,7 @@ internal/imgserve/          画像 ID の検証と MIME 判定
 internal/settings/          設定の永続化
 internal/bench/             合成データ生成と統計
 cmd/zipscope-bench/         ベンチマークコマンド
+shell/                      エクスプローラー統合（C++/COM）
 frontend/                   Vue 3 + TypeScript
 ```
 

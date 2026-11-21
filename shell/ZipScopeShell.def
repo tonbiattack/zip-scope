@@ -1,0 +1,8 @@
+; Only the COM entry points are exported. Everything else stays internal so the
+; DLL cannot be used as a general-purpose library by another process.
+LIBRARY ZipScopeShell
+EXPORTS
+    DllGetClassObject   PRIVATE
+    DllCanUnloadNow     PRIVATE
+    DllRegisterServer   PRIVATE
+    DllUnregisterServer PRIVATE

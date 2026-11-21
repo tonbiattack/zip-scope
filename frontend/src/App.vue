@@ -486,7 +486,34 @@ onMounted(async () => {
   if (s?.root) {
     await startScan(s.root)
   }
+
+  // A path from the Explorer context menu wins over the restored session: scan
+  // its folder and select it.
+  try {
+    const target = await backend.startupTarget()
+    if (target) {
+      const dir = target.replace(/[\\/][^\\/]*$/, '')
+      await startScan(dir)
+      await selectByPath(target)
+    }
+  } catch {
+    // A missing target is not fatal; the restored session is already showing.
+  }
 })
+
+// selectByPath waits for the scan to report the archive, then selects it.
+async function selectByPath(path: string) {
+  const deadline = Date.now() + 15000
+  while (Date.now() < deadline) {
+    const found = archives.value.find((a) => a.path.toLowerCase() === path.toLowerCase())
+    if (found) {
+      await selectArchive(found)
+      return
+    }
+    await new Promise((r) => setTimeout(r, 100))
+  }
+  notify(`ZIP が見つかりません: ${path}`)
+}
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)

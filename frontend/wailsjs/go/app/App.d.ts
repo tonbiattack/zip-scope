@@ -54,7 +54,11 @@ export function RenameArchive(arg1:number,arg2:string):Promise<app.OrganizeResul
 
 export function RevealInExplorer(arg1:string):Promise<void>;
 
+export function SetStartupTarget(arg1:string):Promise<void>;
+
 export function StartScan(arg1:string):Promise<number>;
+
+export function StartupTarget():Promise<string>;
 
 export function ThumbSizeOptions():Promise<Array<number>>;
 

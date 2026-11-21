@@ -22,3 +22,11 @@ bench-*.json
 .idea/
 Thumbs.db
 desktop.ini
+
+# Shell extension build output
+build/shell/
+shell/obj/
+shell/obj-test/
+*.obj
+*.exp
+*.lib

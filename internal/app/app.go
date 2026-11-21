@@ -34,6 +34,25 @@ type App struct {
 	archives map[int64]*openArchive
 	scan     *scanState
 	closed   bool
+	// startupTarget is an archive passed on the command line, which takes
+	// precedence over the restored session.
+	startupTarget string
+}
+
+// SetStartupTarget records an archive to open on launch. It is called before
+// the Wails runtime starts, so the frontend can pick it up on first load.
+func (a *App) SetStartupTarget(path string) {
+	a.mu.Lock()
+	a.startupTarget = path
+	a.mu.Unlock()
+}
+
+// StartupTarget returns the archive passed on the command line, or an empty
+// string. The frontend calls this once at startup.
+func (a *App) StartupTarget() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.startupTarget
 }
 
 // openArchive is a cached handle on one indexed archive.

@@ -151,6 +151,7 @@ export interface ZipScopeAPI {
   GetOrganizeCapabilities(): Promise<OrganizeCapabilities>
   RefreshArchive(path: string): Promise<ArchiveSummary>
   PruneMissingArchives(): Promise<number>
+  StartupTarget(): Promise<string>
 }
 
 declare global {

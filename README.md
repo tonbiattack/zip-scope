@@ -270,6 +270,21 @@ wails build -clean -platform windows/amd64
 
 成果物は `build/bin/ZipScope.exe` です。
 
+### アイコン
+
+アイコンは `scripts/make-icon.ps1` で生成します。デザインを変えたら再生成してからビルドしてください。
+
+```powershell
+pwsh scripts/make-icon.ps1
+wails build -platform windows/amd64
+```
+
+- `build/appicon.png` — 1024px のマスター画像
+- `build/windows/icon.ico` — 16〜256px の 9 サイズを含む ICO
+
+各サイズは縮小ではなくベクターから描き直すため、16px でも潰れません。
+エクスプローラー統合の DLL も同じアイコンを使います（`shell/ZipScopeShell.rc`）。
+
 ### テスト
 
 ```powershell
@@ -310,6 +325,7 @@ internal/settings/          設定の永続化
 internal/bench/             合成データ生成と統計
 cmd/zipscope-bench/         ベンチマークコマンド
 shell/                      エクスプローラー統合（C++/COM）
+scripts/make-icon.ps1       アイコン生成
 frontend/                   Vue 3 + TypeScript
 ```
 

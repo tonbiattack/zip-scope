@@ -53,6 +53,14 @@ if errorlevel 1 (
 )
 
 echo Linking...
+REM The resource file carries the icon and version info, so the DLL shows the
+REM ZipScope icon in Explorer's handler list and in file properties.
+rc /nologo /fo "%OBJ_DIR%\ZipScopeShell.res" "%SCRIPT_DIR%ZipScopeShell.rc"
+if errorlevel 1 (
+  echo ERROR: resource compilation failed.
+  exit /b 1
+)
+
 link /nologo /DLL /OUT:"%OUT_DIR%\ZipScopeShell.dll" ^
      /DEF:"%SCRIPT_DIR%ZipScopeShell.def" ^
      /IMPLIB:"%OBJ_DIR%\ZipScopeShell.lib" ^
@@ -62,6 +70,7 @@ link /nologo /DLL /OUT:"%OUT_DIR%\ZipScopeShell.dll" ^
      "%OBJ_DIR%\decode.obj" ^
      "%OBJ_DIR%\inflate.obj" ^
      "%OBJ_DIR%\register.obj" ^
+     "%OBJ_DIR%\ZipScopeShell.res" ^
      shlwapi.lib ole32.lib oleaut32.lib uuid.lib windowscodecs.lib advapi32.lib shell32.lib user32.lib gdi32.lib
 if errorlevel 1 (
   echo ERROR: link failed.

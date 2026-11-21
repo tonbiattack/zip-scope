@@ -37,25 +37,75 @@ std::wstring ClsidToString(REFCLSID clsid) {
     return std::wstring(buf);
 }
 
+namespace {
+
+// Exists reports whether path is an existing file.
+bool Exists(const std::wstring& path) {
+    return !path.empty() && PathFileExistsW(path.c_str()) != FALSE;
+}
+
+// ReadAppPath looks up an executable registered under App Paths, which is how
+// Windows records where an installed program lives.
+std::wstring ReadAppPath(HKEY root, const wchar_t* subkey) {
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(root, subkey, 0, KEY_READ, &key) != ERROR_SUCCESS) {
+        return std::wstring();
+    }
+    wchar_t buf[MAX_PATH * 2] = {};
+    DWORD size = sizeof(buf);
+    DWORD type = 0;
+    LONG rc = RegQueryValueExW(key, nullptr, nullptr, &type,
+                               reinterpret_cast<BYTE*>(buf), &size);
+    RegCloseKey(key);
+    if (rc != ERROR_SUCCESS || (type != REG_SZ && type != REG_EXPAND_SZ)) {
+        return std::wstring();
+    }
+    // An App Paths value may be quoted.
+    std::wstring value(buf);
+    if (value.size() >= 2 && value.front() == L'"' && value.back() == L'"') {
+        value = value.substr(1, value.size() - 2);
+    }
+    return value;
+}
+
+}  // namespace
+
 std::wstring ZipScopeExePath() {
-    // 1. Next to the DLL, which is how a portable install is laid out.
+    // 1. Next to the DLL, which is how the installer lays it out.
     std::wstring dll = ModulePath();
     if (!dll.empty()) {
         std::wstring dir = dll.substr(0, dll.find_last_of(L'\\') + 1);
         std::wstring candidate = dir + L"ZipScope.exe";
-        if (PathFileExistsW(candidate.c_str())) return candidate;
+        if (Exists(candidate)) return candidate;
+
+        // 2. A development checkout keeps the DLL in build\shell and the
+        //    executable in build\bin, so look one level across as well.
+        std::wstring parent = dir;
+        if (!parent.empty() && parent.back() == L'\\') parent.pop_back();
+        size_t slash = parent.find_last_of(L'\\');
+        if (slash != std::wstring::npos) {
+            std::wstring up = parent.substr(0, slash + 1);
+            candidate = up + L"bin\\ZipScope.exe";
+            if (Exists(candidate)) return candidate;
+        }
     }
 
-    // 2. The per-user install location the README documents.
+    // 3. The per-user install location the README documents.
     wchar_t localAppData[MAX_PATH * 2] = {};
     DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData, ARRAYSIZE(localAppData));
     if (n > 0 && n < ARRAYSIZE(localAppData)) {
         std::wstring candidate = std::wstring(localAppData) +
                                  L"\\Programs\\ZipScope\\ZipScope.exe";
-        if (PathFileExistsW(candidate.c_str())) return candidate;
+        if (Exists(candidate)) return candidate;
     }
 
-    // 3. Anywhere on PATH.
+    // 4. App Paths, which the installer writes. This is the same lookup the
+    //    Run dialog uses, so it works regardless of where the app was placed.
+    const wchar_t* appPathKey = L"Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\ZipScope.exe";
+    if (std::wstring p = ReadAppPath(HKEY_CURRENT_USER, appPathKey); Exists(p)) return p;
+    if (std::wstring p = ReadAppPath(HKEY_LOCAL_MACHINE, appPathKey); Exists(p)) return p;
+
+    // 5. Anywhere on PATH.
     wchar_t found[MAX_PATH * 2] = {};
     if (SearchPathW(nullptr, L"ZipScope.exe", nullptr, ARRAYSIZE(found), found, nullptr) > 0) {
         return std::wstring(found);

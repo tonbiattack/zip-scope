@@ -231,6 +231,8 @@ export namespace app {
 	    selectedEntry?: number;
 	    scrollTop?: number;
 	    thumbSize?: number;
+	    viewMode?: string;
+	    iconSize?: number;
 	    sortMode?: string;
 	    sortDesc?: boolean;
 	    search?: string;
@@ -252,6 +254,8 @@ export namespace app {
 	        this.selectedEntry = source["selectedEntry"];
 	        this.scrollTop = source["scrollTop"];
 	        this.thumbSize = source["thumbSize"];
+	        this.viewMode = source["viewMode"];
+	        this.iconSize = source["iconSize"];
 	        this.sortMode = source["sortMode"];
 	        this.sortDesc = source["sortDesc"];
 	        this.search = source["search"];
@@ -321,6 +325,8 @@ export namespace settings {
 	    selectedEntry: number;
 	    scrollTop: number;
 	    thumbSize: number;
+	    viewMode: string;
+	    iconSize: number;
 	    sortMode: string;
 	    sortDesc: boolean;
 	    search: string;
@@ -345,6 +351,8 @@ export namespace settings {
 	        this.selectedEntry = source["selectedEntry"];
 	        this.scrollTop = source["scrollTop"];
 	        this.thumbSize = source["thumbSize"];
+	        this.viewMode = source["viewMode"];
+	        this.iconSize = source["iconSize"];
 	        this.sortMode = source["sortMode"];
 	        this.sortDesc = source["sortDesc"];
 	        this.search = source["search"];

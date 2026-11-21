@@ -1,9 +1,13 @@
 <script setup lang="ts">
-// Top-level orchestration: scan lifecycle, selection, prefetch, persistence and
-// keyboard shortcuts.
+// Top-level orchestration.
+//
+// The app behaves like a small file browser: a folder shows its archives, and
+// opening one descends into it to show its images. A navigation stack provides
+// back/forward, and the address bar reflects the current location.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
-import ArchiveList from './components/ArchiveList.vue'
-import ThumbGrid from './components/ThumbGrid.vue'
+import AddressBar from './components/AddressBar.vue'
+import CommandBar from './components/CommandBar.vue'
+import FileList, { type ViewMode } from './components/FileList.vue'
 import ImageViewer from './components/ImageViewer.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import ArchiveMenu from './components/ArchiveMenu.vue'
@@ -21,12 +25,12 @@ import type {
 } from './lib/types'
 import { formatDuration } from './lib/format'
 
+// --- state ----------------------------------------------------------------
+
 const settings = ref<Settings | null>(null)
 const archives = ref<ArchiveSummary[]>([])
-const selectedId = ref<number | null>(null)
 const detail = shallowRef<ArchiveDetail | null>(null)
 const detailLoading = ref(false)
-const selectedOrdinal = ref<number | null>(null)
 const viewerIndex = ref<number | null>(null)
 const scanning = ref(false)
 const scanInfo = ref<ScanResult | null>(null)
@@ -37,14 +41,26 @@ const prefetchStats = ref<PrefetchStats | null>(null)
 const toast = ref<string | null>(null)
 const dragging = ref(false)
 
-// Organize state: the context menu target and the active dialog.
+// Navigation: the current folder, and the archive we are inside (if any).
+const currentFolder = ref('')
+const openArchive = ref<ArchiveSummary | null>(null)
+const selectedKeys = ref<string[]>([])
+
+// History stacks hold the location, not the selection.
+interface Location {
+  folder: string
+  archivePath: string | null
+}
+const history = ref<Location[]>([])
+const historyIndex = ref(-1)
+
+// Organize state.
 const menu = ref<{ archive: ArchiveSummary; x: number; y: number } | null>(null)
 const organizeCaps = ref<OrganizeCapabilities | null>(null)
 type DialogKind = 'rename' | 'move' | 'delete'
 const dialog = ref<{ kind: DialogKind; archive: ArchiveSummary } | null>(null)
 
-const listRef = ref<InstanceType<typeof ArchiveList> | null>(null)
-const gridRef = ref<InstanceType<typeof ThumbGrid> | null>(null)
+const listRef = ref<InstanceType<typeof FileList> | null>(null)
 
 let toastTimer: number | undefined
 function notify(msg: string) {
@@ -53,16 +69,33 @@ function notify(msg: string) {
   toastTimer = window.setTimeout(() => (toast.value = null), 3200)
 }
 
-const thumbSize = computed(() => settings.value?.thumbSize ?? 192)
+// --- derived --------------------------------------------------------------
+
 const sortMode = computed(() => settings.value?.sortMode ?? 'name')
 const sortDesc = computed(() => settings.value?.sortDesc ?? false)
 const search = computed(() => settings.value?.search ?? '')
+const viewMode = computed<ViewMode>(() => settings.value?.viewMode ?? 'details')
+const iconSize = computed(() => settings.value?.iconSize ?? 128)
 
+const insideArchive = computed(() => openArchive.value != null)
 const entries = computed<EntryInfo[]>(() => detail.value?.entries ?? [])
 
-const selectedArchive = computed(() =>
-  archives.value.find((a) => a.id === selectedId.value) ?? null,
+const currentPath = computed(() =>
+  openArchive.value ? openArchive.value.path : currentFolder.value,
 )
+
+// The selected archive, when exactly one archive is selected in a folder.
+const selectedArchive = computed<ArchiveSummary | null>(() => {
+  if (insideArchive.value) return openArchive.value
+  if (selectedKeys.value.length !== 1) return null
+  const key = selectedKeys.value[0]
+  if (!key.startsWith('a:')) return null
+  return archives.value.find((a) => `a:${a.id || a.path}` === key) ?? null
+})
+
+const canBack = computed(() => historyIndex.value > 0)
+const canForward = computed(() => historyIndex.value < history.value.length - 1)
+const canUp = computed(() => insideArchive.value || parentOf(currentFolder.value) !== '')
 
 // --- settings -------------------------------------------------------------
 
@@ -84,15 +117,105 @@ function patchSettings(patch: Partial<Settings>) {
   }, 250)
 }
 
+// --- navigation -----------------------------------------------------------
+
+function parentOf(path: string): string {
+  if (!path) return ''
+  const trimmed = path.replace(/[\\/]+$/, '')
+  const idx = Math.max(trimmed.lastIndexOf('\\'), trimmed.lastIndexOf('/'))
+  if (idx <= 0) return ''
+  const parent = trimmed.slice(0, idx)
+  // "C:" alone is the drive root; keep the trailing separator.
+  return parent.endsWith(':') ? parent + '\\' : parent
+}
+
+// pushLocation records a new location in the history, dropping any forward
+// entries the way a browser does.
+function pushLocation(loc: Location) {
+  const cur = history.value[historyIndex.value]
+  if (cur && cur.folder === loc.folder && cur.archivePath === loc.archivePath) return
+  history.value = history.value.slice(0, historyIndex.value + 1)
+  history.value.push(loc)
+  historyIndex.value = history.value.length - 1
+}
+
+// pendingArchivePath is set when a location names an archive that the scan has
+// not reported yet. The scan:file handler consumes it as soon as the archive
+// appears, which is what makes "open this ZIP from Explorer" work even though
+// the folder has to be scanned first.
+const pendingArchivePath = ref<string | null>(null)
+
+async function applyLocation(loc: Location, record = true) {
+  if (record) pushLocation(loc)
+  selectedKeys.value = []
+  viewerIndex.value = null
+
+  if (loc.archivePath) {
+    const found = archives.value.find((a) => a.path === loc.archivePath)
+    if (found) {
+      pendingArchivePath.value = null
+      await enterArchive(found, false)
+      return
+    }
+    // The archive is not in the list yet (a fresh scan); remember it and let
+    // the scan:file handler open it when it arrives.
+    pendingArchivePath.value = loc.archivePath
+    openArchive.value = null
+    detail.value = null
+    currentFolder.value = loc.folder
+    if (loc.folder) await startScan(loc.folder, false)
+    return
+  }
+
+  pendingArchivePath.value = null
+  openArchive.value = null
+  detail.value = null
+  currentFolder.value = loc.folder
+  if (loc.folder) await startScan(loc.folder, false)
+}
+
+async function goBack() {
+  if (!canBack.value) return
+  historyIndex.value--
+  await applyLocation(history.value[historyIndex.value], false)
+}
+
+async function goForward() {
+  if (!canForward.value) return
+  historyIndex.value++
+  await applyLocation(history.value[historyIndex.value], false)
+}
+
+async function goUp() {
+  if (insideArchive.value) {
+    await applyLocation({ folder: currentFolder.value, archivePath: null })
+    return
+  }
+  const parent = parentOf(currentFolder.value)
+  if (parent) await applyLocation({ folder: parent, archivePath: null })
+}
+
+async function navigateTo(path: string) {
+  await applyLocation({ folder: path, archivePath: null })
+}
+
+async function refresh() {
+  if (insideArchive.value && openArchive.value) {
+    const arc = openArchive.value
+    await enterArchive(arc, true)
+    return
+  }
+  if (currentFolder.value) await startScan(currentFolder.value, true)
+}
+
 // --- scanning -------------------------------------------------------------
 
-async function startScan(root: string) {
+async function startScan(root: string, keepSelection = false) {
   if (!root) return
-  archives.value = []
-  selectedId.value = null
-  detail.value = null
-  selectedOrdinal.value = null
-  skips.value = []
+  if (!keepSelection) {
+    archives.value = []
+    skips.value = []
+  }
   scanning.value = true
   scanInfo.value = null
   try {
@@ -107,7 +230,7 @@ async function startScan(root: string) {
 async function pickFolder() {
   try {
     const dir = await backend.pickFolder()
-    if (dir) await startScan(dir)
+    if (dir) await applyLocation({ folder: dir, archivePath: null })
   } catch (err) {
     notify(`フォルダを選択できません: ${String(err)}`)
   }
@@ -119,53 +242,37 @@ async function cancelScan() {
 
 function upsertArchive(summary: ArchiveSummary) {
   const idx = archives.value.findIndex((a) => a.path === summary.path)
-  if (idx >= 0) {
-    archives.value[idx] = summary
-  } else {
-    archives.value.push(summary)
-  }
+  if (idx >= 0) archives.value[idx] = summary
+  else archives.value.push(summary)
 }
 
-// --- selection ------------------------------------------------------------
+// --- entering an archive --------------------------------------------------
 
-async function selectArchive(summary: ArchiveSummary) {
+async function enterArchive(summary: ArchiveSummary, record = true) {
   if (summary.id === 0) {
-    // The archive could not be indexed; show its error without a grid.
-    selectedId.value = null
-    detail.value = {
-      id: 0,
-      path: summary.path,
-      name: summary.name,
-      status: summary.status,
-      error: summary.error,
-      entries: [],
-    }
+    notify(`この ZIP は開けません: ${summary.error ?? summary.status}`)
     return
   }
-  if (selectedId.value === summary.id) return
-  selectedId.value = summary.id
-  selectedOrdinal.value = null
-  viewerIndex.value = null
+  if (record) {
+    pushLocation({ folder: currentFolder.value, archivePath: summary.path })
+  }
+  openArchive.value = summary
   detailLoading.value = true
   await backend.bumpSelection()
   try {
     const d = await backend.getArchiveEntries(summary.id)
     detail.value = d
-    // Restore the saved entry when it belongs to this archive.
+    // Restore the saved image when this is the archive the user left off in.
     const saved = settings.value
     if (saved && saved.selectedArchive === summary.path && d.entries.length > 0) {
       const found = d.entries.find((e) => e.ordinal === saved.selectedEntry)
-      selectedOrdinal.value = found ? found.ordinal : d.entries[0].ordinal
+      selectedKeys.value = [`e:${found ? found.ordinal : d.entries[0].ordinal}`]
     } else if (d.entries.length > 0) {
-      selectedOrdinal.value = d.entries[0].ordinal
+      selectedKeys.value = [`e:${d.entries[0].ordinal}`]
     }
     await nextTick()
-    gridRef.value?.measure()
-    if (saved && saved.selectedArchive === summary.path && saved.scrollTop > 0) {
-      gridRef.value?.restoreScroll(saved.scrollTop)
-    }
-    // Warm the first screen at low priority so scrolling feels instant.
-    void backend.warmArchive(summary.id, 24, thumbSize.value)
+    listRef.value?.measure()
+    void backend.warmArchive(summary.id, 24, iconSize.value)
     patchSettings({ selectedArchive: summary.path })
   } catch (err) {
     detail.value = {
@@ -182,42 +289,62 @@ async function selectArchive(summary: ArchiveSummary) {
   }
 }
 
-function selectEntry(entry: EntryInfo, index: number) {
-  selectedOrdinal.value = entry.ordinal
-  patchSettings({ selectedEntry: entry.ordinal })
-  void backend.bumpSelection()
-  void backend.prefetchImage(selectedId.value ?? 0, entry.ordinal, thumbSize.value, Priority.Selected)
-  // Prefetch the neighbours of the newly selected entry.
-  const ahead = settings.value?.prefetchAhead ?? 2
-  for (let d = 1; d <= ahead; d++) {
-    for (const j of [index - d, index + d]) {
-      const e = entries.value[j]
-      if (!e) continue
-      void backend.prefetchImage(selectedId.value ?? 0, e.ordinal, thumbSize.value, Priority.Neighbour)
+// --- selection and opening ------------------------------------------------
+
+function onSelect(keys: string[], anchor: string) {
+  selectedKeys.value = keys
+  if (insideArchive.value && keys.length === 1 && keys[0].startsWith('e:')) {
+    const ord = Number(keys[0].slice(2))
+    patchSettings({ selectedEntry: ord })
+    void backend.bumpSelection()
+    const id = openArchive.value?.id ?? 0
+    void backend.prefetchImage(id, ord, iconSize.value, Priority.Selected)
+    const idx = entries.value.findIndex((e) => e.ordinal === ord)
+    const ahead = settings.value?.prefetchAhead ?? 2
+    for (let d = 1; d <= ahead; d++) {
+      for (const j of [idx - d, idx + d]) {
+        const e = entries.value[j]
+        if (!e) continue
+        void backend.prefetchImage(id, e.ordinal, iconSize.value, Priority.Neighbour)
+      }
     }
+  }
+  void anchor
+}
+
+async function onOpen(key: string) {
+  if (key.startsWith('a:')) {
+    const arc = archives.value.find((a) => `a:${a.id || a.path}` === key)
+    if (arc) await enterArchive(arc)
+    return
+  }
+  if (key.startsWith('e:')) {
+    const ord = Number(key.slice(2))
+    const idx = entries.value.findIndex((e) => e.ordinal === ord)
+    if (idx >= 0) openViewer(idx)
   }
 }
 
-function openViewer(entry: EntryInfo, index: number) {
-  selectedOrdinal.value = entry.ordinal
+function openViewer(index: number) {
+  const e = entries.value[index]
+  if (!e) return
   viewerIndex.value = index
-  void backend.prefetchFull(selectedId.value ?? 0, entry.ordinal, Priority.Selected)
+  selectedKeys.value = [`e:${e.ordinal}`]
+  patchSettings({ selectedEntry: e.ordinal })
+  void backend.prefetchFull(openArchive.value?.id ?? 0, e.ordinal, Priority.Selected)
 }
 
 function closeViewer() {
   viewerIndex.value = null
-  // Persist where the user stopped.
-  const top = gridRef.value?.currentScroll() ?? 0
-  patchSettings({ scrollTop: top })
 }
 
 function navigateViewer(index: number) {
   const e = entries.value[index]
   if (!e) return
   viewerIndex.value = index
-  selectedOrdinal.value = e.ordinal
+  selectedKeys.value = [`e:${e.ordinal}`]
   patchSettings({ selectedEntry: e.ordinal })
-  const id = selectedId.value ?? 0
+  const id = openArchive.value?.id ?? 0
   void backend.prefetchFull(id, e.ordinal, Priority.Selected)
   const ahead = settings.value?.prefetchAhead ?? 2
   for (let d = 1; d <= ahead; d++) {
@@ -232,18 +359,17 @@ function navigateViewer(index: number) {
 // Ctrl+Left/Right moves between archives while the viewer is open.
 async function navigateArchive(delta: number) {
   const list = sortedArchives.value
-  const cur = list.findIndex((a) => a.id === selectedId.value)
+  const cur = list.findIndex((a) => a.path === openArchive.value?.path)
   if (cur < 0) return
   const next = cur + delta
   if (next < 0 || next >= list.length) return
-  await selectArchive(list[next])
+  await enterArchive(list[next], false)
   if (entries.value.length > 0) {
     viewerIndex.value = 0
-    selectedOrdinal.value = entries.value[0].ordinal
+    selectedKeys.value = [`e:${entries.value[0].ordinal}`]
   }
 }
 
-// The viewer navigates in the same order the list shows.
 const sortedArchives = computed(() => {
   const q = search.value.trim().toLowerCase()
   let list = archives.value
@@ -258,43 +384,16 @@ const sortedArchives = computed(() => {
   return sorted
 })
 
-// --- cache ----------------------------------------------------------------
-
-async function refreshStats() {
-  try {
-    cacheStats.value = await backend.getCacheStats()
-    prefetchStats.value = await backend.getPrefetchStats()
-  } catch {
-    // Diagnostics are best-effort.
-  }
-}
-
-async function clearCache() {
-  await backend.clearCache()
-  notify('キャッシュを消去しました')
-  await refreshStats()
-}
-
-async function clearThumbs() {
-  await backend.clearThumbnails()
-  notify('サムネイルを削除しました')
-  await refreshStats()
-}
-
-async function evict() {
-  const n = await backend.evictCache()
-  notify(`${n} 件のサムネイルを整理しました`)
-  await refreshStats()
-}
-
 // --- organize -------------------------------------------------------------
 
-function openMenu(archive: ArchiveSummary, x: number, y: number) {
-  menu.value = { archive, x, y }
+function openMenu(key: string, x: number, y: number) {
+  const arc = archives.value.find((a) => `a:${a.id || a.path}` === key)
+  if (!arc) return
+  menu.value = { archive: arc, x, y }
 }
 
 function startDialog(kind: DialogKind) {
-  const target = menu.value?.archive
+  const target = menu.value?.archive ?? selectedArchive.value
   if (!target) return
   dialog.value = { kind, archive: target }
   menu.value = null
@@ -326,50 +425,62 @@ async function confirmDialog(value: string) {
   }
 }
 
-// removeArchive drops a row from the list and clears the selection if it was
-// the one removed.
 function removeArchive(path: string) {
   const before = archives.value.length
   archives.value = archives.value.filter((a) => a.path !== path)
-  // Keep the status bar honest: the scan summary was taken before the removal.
   if (scanInfo.value && archives.value.length < before) {
     scanInfo.value = { ...scanInfo.value, files: Math.max(0, scanInfo.value.files - 1) }
   }
-  if (selectedArchive.value?.path === path) {
-    selectedId.value = null
+  if (openArchive.value?.path === path) {
+    openArchive.value = null
     detail.value = null
-    selectedOrdinal.value = null
+    selectedKeys.value = []
     viewerIndex.value = null
   }
 }
 
-// rescanAfterOrganize replaces the row for oldPath with a freshly indexed row
-// for newPath. The archive gets a new id because its cache row was deleted, so
-// the old row must be removed by path rather than matched by id.
 async function rescanAfterOrganize(oldPath: string, newPath: string) {
-  const wasSelected = selectedArchive.value?.path === oldPath
+  const wasOpen = openArchive.value?.path === oldPath
   try {
     const sum = await backend.refreshArchive(newPath)
-    // Drop the stale row and any duplicate for the new path.
     archives.value = archives.value.filter((a) => a.path !== oldPath && a.path !== newPath)
     archives.value.push(sum)
-
-    if (wasSelected) {
-      selectedId.value = sum.id
-      selectedOrdinal.value = null
-      viewerIndex.value = null
-      detail.value = await backend.getArchiveEntries(sum.id)
-      if (detail.value.entries.length > 0) {
-        selectedOrdinal.value = detail.value.entries[0].ordinal
-      }
-      patchSettings({ selectedArchive: newPath, selectedEntry: 0 })
+    if (wasOpen) {
+      await enterArchive(sum, false)
     }
   } catch (err) {
-    // The file moved but re-indexing failed: drop the stale row so the list
-    // does not show a path that no longer exists.
     removeArchive(oldPath)
     notify(`再読み込みに失敗しました: ${String(err)}`)
   }
+}
+
+// --- cache ----------------------------------------------------------------
+
+async function refreshStats() {
+  try {
+    cacheStats.value = await backend.getCacheStats()
+    prefetchStats.value = await backend.getPrefetchStats()
+  } catch {
+    // Diagnostics are best-effort.
+  }
+}
+
+async function clearCache() {
+  await backend.clearCache()
+  notify('キャッシュを消去しました')
+  await refreshStats()
+}
+
+async function clearThumbs() {
+  await backend.clearThumbnails()
+  notify('サムネイルを削除しました')
+  await refreshStats()
+}
+
+async function evict() {
+  const n = await backend.evictCache()
+  notify(`${n} 件のサムネイルを整理しました`)
+  await refreshStats()
 }
 
 // --- drag and drop --------------------------------------------------------
@@ -388,14 +499,19 @@ async function onDrop(e: DragEvent) {
   dragging.value = false
   const files = Array.from(e.dataTransfer?.files ?? [])
   if (files.length === 0) return
-  // The WebView exposes a path on dropped files; a folder drop scans it.
   const first = files[0] as File & { path?: string }
   const p = first.path
   if (!p) {
     notify('この環境ではドロップしたパスを取得できません')
     return
   }
-  await startScan(p)
+  // A dropped archive opens directly; a dropped folder is scanned.
+  if (/\.(zip|cbz)$/i.test(p)) {
+    const dir = parentOf(p)
+    await applyLocation({ folder: dir, archivePath: p })
+  } else {
+    await applyLocation({ folder: p, archivePath: null })
+  }
 }
 
 // --- keyboard -------------------------------------------------------------
@@ -412,21 +528,53 @@ function onKeydown(e: KeyboardEvent) {
   }
   if (typing) return
 
-  if (e.key === 'Enter' && selectedOrdinal.value != null) {
-    const idx = entries.value.findIndex((x) => x.ordinal === selectedOrdinal.value)
-    if (idx >= 0) {
-      e.preventDefault()
-      openViewer(entries.value[idx], idx)
-    }
+  if (e.altKey && e.key === 'ArrowLeft') {
+    e.preventDefault()
+    void goBack()
+    return
+  }
+  if (e.altKey && e.key === 'ArrowRight') {
+    e.preventDefault()
+    void goForward()
+    return
+  }
+  if (e.altKey && e.key === 'ArrowUp') {
+    e.preventDefault()
+    void goUp()
+    return
+  }
+  if (e.key === 'Backspace') {
+    e.preventDefault()
+    void goUp()
+    return
+  }
+  if (e.key === 'F5') {
+    e.preventDefault()
+    void refresh()
+    return
+  }
+  if (e.key === 'Enter' && selectedKeys.value.length === 1) {
+    e.preventDefault()
+    void onOpen(selectedKeys.value[0])
     return
   }
   if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-    const list = sortedArchives.value
-    if (list.length === 0) return
     e.preventDefault()
-    const cur = list.findIndex((a) => a.id === selectedId.value)
-    const next = Math.min(list.length - 1, Math.max(0, cur + (e.key === 'ArrowDown' ? 1 : -1)))
-    if (next !== cur) void selectArchive(list[next])
+    moveSelection(e.key === 'ArrowDown' ? 1 : -1)
+  }
+}
+
+// moveSelection walks the visible list, which is what the arrow keys do in
+// Explorer's details view.
+function moveSelection(delta: number) {
+  const list = insideArchive.value ? entries.value.map((e) => `e:${e.ordinal}`) : sortedArchives.value.map((a) => `a:${a.id || a.path}`)
+  if (list.length === 0) return
+  const cur = selectedKeys.value.length === 1 ? list.indexOf(selectedKeys.value[0]) : -1
+  const next = Math.min(list.length - 1, Math.max(0, cur + delta))
+  selectedKeys.value = [list[next]]
+  if (insideArchive.value) {
+    const ord = Number(list[next].slice(2))
+    patchSettings({ selectedEntry: ord })
   }
 }
 
@@ -445,14 +593,19 @@ onMounted(async () => {
   window.addEventListener('dragleave', onDragLeave)
   window.addEventListener('drop', onDrop)
 
-  window.runtime?.EventsOn('scan:started', (payload) => {
-    const p = payload as { root: string }
+  window.runtime?.EventsOn('scan:started', () => {
     scanning.value = true
-    notify(`走査中: ${p.root}`)
   })
   window.runtime?.EventsOn('scan:file', (payload) => {
     const p = payload as { archive: ArchiveSummary }
-    if (p?.archive) upsertArchive(p.archive)
+    if (!p?.archive) return
+    upsertArchive(p.archive)
+    // A location that named this archive can now be completed.
+    if (pendingArchivePath.value && p.archive.path === pendingArchivePath.value) {
+      const target = p.archive
+      pendingArchivePath.value = null
+      void enterArchive(target, false)
+    }
   })
   window.runtime?.EventsOn('scan:skip', (payload) => {
     const p = payload as { path: string; err: string }
@@ -464,11 +617,7 @@ onMounted(async () => {
     scanInfo.value = p.result
     if (p.error) notify(`走査エラー: ${p.error}`)
     else if (p.result.cancelled) notify('走査を中止しました')
-    else
-      notify(
-        `${p.result.files} 件の ZIP を ${formatDuration(p.result.durationMs)} で検出しました`,
-      )
-    // Restore the previous selection once the list is populated.
+    else notify(`${p.result.files} 件の ZIP を ${formatDuration(p.result.durationMs)} で検出しました`)
     void restoreSelection()
   })
 
@@ -481,39 +630,29 @@ onMounted(async () => {
     organizeCaps.value = null
   }
 
-  // Resume the last session: rescan the saved root and reselect the archive.
+  // A path from the Explorer context menu wins over the restored session.
+  let target = ''
+  try {
+    target = await backend.startupTarget()
+  } catch {
+    target = ''
+  }
+
+  if (target) {
+    // The target may be a folder or an archive; the extension decides which.
+    if (/\.(zip|cbz)$/i.test(target)) {
+      await applyLocation({ folder: parentOf(target), archivePath: target })
+    } else {
+      await applyLocation({ folder: target, archivePath: null })
+    }
+    return
+  }
+
   const s = settings.value
   if (s?.root) {
-    await startScan(s.root)
-  }
-
-  // A path from the Explorer context menu wins over the restored session: scan
-  // its folder and select it.
-  try {
-    const target = await backend.startupTarget()
-    if (target) {
-      const dir = target.replace(/[\\/][^\\/]*$/, '')
-      await startScan(dir)
-      await selectByPath(target)
-    }
-  } catch {
-    // A missing target is not fatal; the restored session is already showing.
+    await applyLocation({ folder: s.root, archivePath: null })
   }
 })
-
-// selectByPath waits for the scan to report the archive, then selects it.
-async function selectByPath(path: string) {
-  const deadline = Date.now() + 15000
-  while (Date.now() < deadline) {
-    const found = archives.value.find((a) => a.path.toLowerCase() === path.toLowerCase())
-    if (found) {
-      await selectArchive(found)
-      return
-    }
-    await new Promise((r) => setTimeout(r, 100))
-  }
-  notify(`ZIP が見つかりません: ${path}`)
-}
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
@@ -525,21 +664,14 @@ onBeforeUnmount(() => {
   window.clearTimeout(toastTimer)
 })
 
+// After a scan finishes, reopen the archive the user was in.
 async function restoreSelection() {
   const s = settings.value
-  if (!s?.selectedArchive) return
+  if (!s?.selectedArchive || openArchive.value) return
   const target = archives.value.find((a) => a.path === s.selectedArchive)
-  if (target) await selectArchive(target)
-}
-
-// Persist the grid scroll position when the user stops scrolling.
-let scrollTimer: number | undefined
-function onGridScroll() {
-  window.clearTimeout(scrollTimer)
-  scrollTimer = window.setTimeout(() => {
-    const top = gridRef.value?.currentScroll() ?? 0
-    patchSettings({ scrollTop: top })
-  }, 400)
+  if (target && history.value[historyIndex.value]?.archivePath === s.selectedArchive) {
+    await enterArchive(target, false)
+  }
 }
 
 const viewerEntry = computed(() => (viewerIndex.value != null ? entries.value[viewerIndex.value] : null))
@@ -547,44 +679,72 @@ const viewerEntry = computed(() => (viewerIndex.value != null ? entries.value[vi
 
 <template>
   <div class="app" @dragover.prevent="onDragOver" @drop.prevent="onDrop">
-    <main class="main">
-      <ArchiveList
-        ref="listRef"
-        :archives="archives"
-        :selected-id="selectedId"
-        :sort-mode="sortMode"
-        :sort-desc="sortDesc"
-        :search="search"
-        :scanning="scanning"
-        @select="selectArchive"
-        @update:search="(v) => patchSettings({ search: v })"
-        @update:sort-mode="(v) => patchSettings({ sortMode: v })"
-        @update:sort-desc="(v) => patchSettings({ sortDesc: v })"
-        @pick-folder="pickFolder"
-        @cancel-scan="cancelScan"
-        @reveal="(p) => backend.reveal(p)"
-        @context-menu="openMenu"
-      />
+    <AddressBar
+      :path="currentPath"
+      :inside-archive="insideArchive"
+      :can-back="canBack"
+      :can-forward="canForward"
+      :can-up="canUp"
+      :scanning="scanning"
+      @back="goBack"
+      @forward="goForward"
+      @up="goUp"
+      @refresh="refresh"
+      @navigate="navigateTo"
+      @pick-folder="pickFolder"
+    />
 
-      <ThumbGrid
-        ref="gridRef"
-        :archive-id="selectedId"
-        :entries="entries"
-        :thumb-size="thumbSize"
-        :selected-ordinal="selectedOrdinal"
-        :loading="detailLoading"
-        :status="detail?.status ?? 'ok'"
-        :error="detail?.error"
-        @select="selectEntry"
-        @open="openViewer"
-        @prefetch="(ord, pri) => backend.prefetchImage(selectedId ?? 0, ord, thumbSize, pri)"
-        @update:thumb-size="(v) => patchSettings({ thumbSize: v })"
-        @scroll="onGridScroll"
-      />
-    </main>
+    <CommandBar
+      :inside-archive="insideArchive"
+      :has-selection="selectedKeys.length > 0"
+      :selection-count="selectedKeys.length"
+      :view-mode="viewMode"
+      :icon-size="iconSize"
+      :scanning="scanning"
+      :can-recycle="organizeCaps?.recycleBin ?? false"
+      @pick-folder="pickFolder"
+      @open="selectedKeys.length === 1 && onOpen(selectedKeys[0])"
+      @reveal="selectedArchive && backend.reveal(selectedArchive.path)"
+      @rename="startDialog('rename')"
+      @move="startDialog('move')"
+      @delete="startDialog('delete')"
+      @cancel-scan="cancelScan"
+      @update:view-mode="(v) => patchSettings({ viewMode: v })"
+      @update:icon-size="(v) => patchSettings({ iconSize: v })"
+      @settings="showSettings = true"
+    />
+
+    <FileList
+      ref="listRef"
+      :archives="sortedArchives"
+      :entries="entries"
+      :inside-archive="insideArchive"
+      :archive-id="openArchive?.id ?? null"
+      :view-mode="viewMode"
+      :icon-size="iconSize"
+      :sort-mode="sortMode"
+      :sort-desc="sortDesc"
+      :search="search"
+      :loading="detailLoading"
+      :status="detail?.status ?? 'ok'"
+      :error="detail?.error"
+      :selected="selectedKeys"
+      @select="onSelect"
+      @open="onOpen"
+      @context-menu="openMenu"
+      @update:sort-mode="(v) => patchSettings({ sortMode: v })"
+      @update:sort-desc="(v) => patchSettings({ sortDesc: v })"
+      @update:view-mode="(v) => patchSettings({ viewMode: v })"
+      @update:icon-size="(v) => patchSettings({ iconSize: v })"
+      @prefetch="(ord) => backend.prefetchImage(openArchive?.id ?? 0, ord, iconSize, Priority.Visible)"
+    />
 
     <footer class="statusbar">
       <span v-if="scanning" class="pulse">走査中…</span>
+      <span v-else-if="insideArchive">
+        {{ entries.length }} 枚
+        <template v-if="detail?.status !== 'ok'"> · {{ detail?.status }}</template>
+      </span>
       <span v-else-if="scanInfo">
         {{ scanInfo.files }} ZIP / {{ scanInfo.dirs }} フォルダ
         <template v-if="scanInfo.skipped"> · スキップ {{ scanInfo.skipped }}</template>
@@ -592,16 +752,19 @@ const viewerEntry = computed(() => (viewerIndex.value != null ? entries.value[vi
       </span>
       <span v-else>準備完了</span>
       <span class="spacer" />
-      <span v-if="selectedArchive" class="path" :title="selectedArchive.path">
-        {{ selectedArchive.path }}
-      </span>
-      <button class="btn ghost small" @click="showSettings = true">設定</button>
+      <input
+        class="search"
+        type="search"
+        :placeholder="insideArchive ? '画像を検索' : 'ZIP を検索'"
+        :value="search"
+        @input="patchSettings({ search: ($event.target as HTMLInputElement).value })"
+      />
     </footer>
 
     <ImageViewer
-      v-if="viewerIndex != null && selectedId != null && viewerEntry"
-      :archive-id="selectedId"
-      :archive-name="detail?.name ?? ''"
+      v-if="viewerIndex != null && openArchive && viewerEntry"
+      :archive-id="openArchive.id"
+      :archive-name="openArchive.name"
       :entries="entries"
       :index="viewerIndex"
       @close="closeViewer"
@@ -677,40 +840,31 @@ const viewerEntry = computed(() => (viewerIndex.value != null ? entries.value[vi
   height: 100vh;
   overflow: hidden;
 }
-.main {
-  flex: 1;
-  display: flex;
-  flex-direction: row;
-  min-height: 0;
-  min-width: 0;
-}
 .statusbar {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 4px 10px;
+  padding: 3px 10px;
   border-top: 1px solid var(--border);
   background: var(--panel);
   font-size: 11px;
   color: var(--fg-dim);
-  min-height: 26px;
+  min-height: 28px;
+  flex: 0 0 auto;
 }
 .spacer {
   flex: 1;
 }
-.path {
-  max-width: 50vw;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  direction: rtl;
-  text-align: left;
-}
 .pulse {
   color: var(--accent);
 }
-.small {
-  padding: 2px 8px;
+.search {
+  width: 200px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
   font-size: 11px;
 }
 .dropzone {

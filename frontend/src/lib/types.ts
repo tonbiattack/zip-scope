@@ -8,6 +8,8 @@ export interface Settings {
   selectedEntry: number
   scrollTop: number
   thumbSize: number
+  viewMode: 'details' | 'medium' | 'large'
+  iconSize: number
   sortMode: 'name' | 'mtime' | 'size'
   sortDesc: boolean
   search: string
@@ -28,6 +30,8 @@ export interface SettingsPatch {
   selectedEntry?: number
   scrollTop?: number
   thumbSize?: number
+  viewMode?: 'details' | 'medium' | 'large'
+  iconSize?: number
   sortMode?: 'name' | 'mtime' | 'size'
   sortDesc?: boolean
   search?: string

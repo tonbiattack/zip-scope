@@ -138,6 +138,8 @@ type SettingsPatch struct {
 	SelectedEntry    *int     `json:"selectedEntry"`
 	ScrollTop        *float64 `json:"scrollTop"`
 	ThumbSize        *int     `json:"thumbSize"`
+	ViewMode         *string  `json:"viewMode"`
+	IconSize         *int     `json:"iconSize"`
 	SortMode         *string  `json:"sortMode"`
 	SortDesc         *bool    `json:"sortDesc"`
 	Search           *string  `json:"search"`
@@ -166,6 +168,12 @@ func (a *App) UpdateSettings(p SettingsPatch) (settings.Settings, error) {
 		}
 		if p.ThumbSize != nil {
 			s.ThumbSize = *p.ThumbSize
+		}
+		if p.ViewMode != nil {
+			s.ViewMode = *p.ViewMode
+		}
+		if p.IconSize != nil {
+			s.IconSize = *p.IconSize
 		}
 		if p.SortMode != nil {
 			s.SortMode = *p.SortMode

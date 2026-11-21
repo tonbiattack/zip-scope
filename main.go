@@ -30,9 +30,10 @@ func main() {
 		log.Fatalf("zipscope: %v", err)
 	}
 
-	// A path on the command line comes from the Explorer context menu or from
-	// "Open with". It selects that archive instead of restoring the last one.
-	if target := archiveArg(os.Args[1:]); target != "" {
+	// A path on the command line comes from the Explorer context menu, a folder
+	// drop, or "Open with". It selects that location instead of restoring the
+	// last one.
+	if target := startupArg(os.Args[1:]); target != "" {
 		application.SetStartupTarget(target)
 	}
 
@@ -66,23 +67,27 @@ func main() {
 	}
 }
 
-// archiveArg returns the first argument that looks like a ZIP/CBZ path. Flags
-// and anything else are ignored so an unexpected argument cannot make the app
-// try to open an arbitrary file.
-func archiveArg(args []string) string {
+// startupArg returns the first argument that names an existing folder or
+// ZIP/CBZ file. Flags and anything else are ignored so an unexpected argument
+// cannot make the app try to open an arbitrary path.
+func startupArg(args []string) string {
 	for _, a := range args {
 		if a == "" || strings.HasPrefix(a, "-") {
 			continue
 		}
-		switch strings.ToLower(filepath.Ext(a)) {
+		abs, err := filepath.Abs(a)
+		if err != nil {
+			continue
+		}
+		fi, err := os.Stat(abs)
+		if err != nil {
+			continue
+		}
+		if fi.IsDir() {
+			return abs
+		}
+		switch strings.ToLower(filepath.Ext(abs)) {
 		case ".zip", ".cbz":
-			abs, err := filepath.Abs(a)
-			if err != nil {
-				continue
-			}
-			if _, err := os.Stat(abs); err != nil {
-				continue
-			}
 			return abs
 		}
 	}

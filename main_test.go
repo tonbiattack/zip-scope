@@ -6,16 +6,20 @@ import (
 	"testing"
 )
 
-func TestArchiveArg(t *testing.T) {
+func TestStartupArg(t *testing.T) {
 	dir := t.TempDir()
 	zipPath := filepath.Join(dir, "book.zip")
 	cbzPath := filepath.Join(dir, "comic.cbz")
 	txtPath := filepath.Join(dir, "notes.txt")
 	upperPath := filepath.Join(dir, "BOOK.ZIP")
+	subDir := filepath.Join(dir, "sub")
 	for _, p := range []string{zipPath, cbzPath, txtPath, upperPath} {
 		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
 			t.Fatalf("write: %v", err)
 		}
+	}
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
 	}
 
 	cases := []struct {
@@ -26,29 +30,30 @@ func TestArchiveArg(t *testing.T) {
 		{"zip", []string{zipPath}, zipPath},
 		{"cbz", []string{cbzPath}, cbzPath},
 		{"uppercase extension", []string{upperPath}, upperPath},
-		{"non-archive", []string{txtPath}, ""},
+		{"folder", []string{subDir}, subDir},
+		{"non-archive file", []string{txtPath}, ""},
 		{"flag ignored", []string{"-debug", zipPath}, zipPath},
 		{"empty", nil, ""},
-		{"missing file", []string{filepath.Join(dir, "gone.zip")}, ""},
-		{"first archive wins", []string{txtPath, zipPath, cbzPath}, zipPath},
+		{"missing path", []string{filepath.Join(dir, "gone.zip")}, ""},
+		{"first valid wins", []string{txtPath, zipPath, cbzPath}, zipPath},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := archiveArg(c.args)
+			got := startupArg(c.args)
 			if c.want == "" {
 				if got != "" {
-					t.Errorf("archiveArg(%v) = %q, want empty", c.args, got)
+					t.Errorf("startupArg(%v) = %q, want empty", c.args, got)
 				}
 				return
 			}
 			if got != c.want {
-				t.Errorf("archiveArg(%v) = %q, want %q", c.args, got, c.want)
+				t.Errorf("startupArg(%v) = %q, want %q", c.args, got, c.want)
 			}
 		})
 	}
 }
 
-func TestArchiveArgReturnsAbsolutePath(t *testing.T) {
+func TestStartupArgReturnsAbsolutePath(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "rel.zip")
 	if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
@@ -65,11 +70,11 @@ func TestArchiveArgReturnsAbsolutePath(t *testing.T) {
 	}
 	defer os.Chdir(wd)
 
-	got := archiveArg([]string{"rel.zip"})
+	got := startupArg([]string{"rel.zip"})
 	if !filepath.IsAbs(got) {
-		t.Errorf("archiveArg returned a relative path: %q", got)
+		t.Errorf("startupArg returned a relative path: %q", got)
 	}
 	if filepath.Base(got) != "rel.zip" {
-		t.Errorf("archiveArg = %q", got)
+		t.Errorf("startupArg = %q", got)
 	}
 }

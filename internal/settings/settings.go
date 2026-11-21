@@ -23,6 +23,10 @@ type Settings struct {
 	ScrollTop float64 `json:"scrollTop"`
 	// ThumbSize is the grid thumbnail width in pixels.
 	ThumbSize int `json:"thumbSize"`
+	// ViewMode is "details", "medium" or "large".
+	ViewMode string `json:"viewMode"`
+	// IconSize is the icon width in pixels for the icon views.
+	IconSize int `json:"iconSize"`
 	// SortMode is one of "name", "mtime", "size".
 	SortMode string `json:"sortMode"`
 	// SortDesc reverses the sort.
@@ -52,6 +56,8 @@ type Settings struct {
 func Default() Settings {
 	return Settings{
 		ThumbSize:        192,
+		ViewMode:         "details",
+		IconSize:         128,
 		SortMode:         "name",
 		CacheLimitBytes:  2 << 30, // 2 GiB
 		MemoryLimitBytes: 256 << 20,
@@ -71,6 +77,14 @@ func (s *Settings) Normalize() {
 	d := Default()
 	if s.ThumbSize < 96 || s.ThumbSize > 512 {
 		s.ThumbSize = d.ThumbSize
+	}
+	switch s.ViewMode {
+	case "details", "medium", "large":
+	default:
+		s.ViewMode = d.ViewMode
+	}
+	if s.IconSize < 64 || s.IconSize > 256 {
+		s.IconSize = d.IconSize
 	}
 	switch s.SortMode {
 	case "name", "mtime", "size":

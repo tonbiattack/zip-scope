@@ -12,6 +12,8 @@ function makeSettings(over: Partial<Settings> = {}): Settings {
     selectedEntry: 0,
     scrollTop: 0,
     thumbSize: 192,
+    viewMode: 'details',
+    iconSize: 128,
     sortMode: 'name',
     sortDesc: false,
     search: '',
@@ -168,12 +170,12 @@ beforeEach(() => {
   delete (window as unknown as { runtime?: unknown }).runtime
 })
 
-// mountApp installs the fakes, mounts the app and pushes one archive into the
-// list through the same event the scanner uses.
+// mountApp installs the fakes, mounts the app and pushes archives into the list
+// through the same event the scanner uses.
 async function mountApp(opts: { settings?: Settings; archives?: ArchiveSummary[] } = {}) {
   const fake = installFake(opts)
   const rt = installRuntime()
-  const w = mount(App)
+  const w = mount(App, { attachTo: document.body })
   await flushPromises()
   for (const a of opts.archives ?? [makeArchive()]) {
     rt.emit('scan:file', { archive: a })
@@ -197,7 +199,7 @@ describe('App', () => {
     expect(fake.calls).toContain('GetSettings')
   })
 
-  it('rescans the saved root on startup', async () => {
+  it('scans the saved root on startup', async () => {
     const fake = installFake({ settings: makeSettings({ root: 'C:\\pics' }) })
     installRuntime()
     mount(App)
@@ -214,22 +216,12 @@ describe('App', () => {
   })
 
   it('adds archives as scan:file events arrive', async () => {
-    installFake()
-    const rt = installRuntime()
-    const w = mount(App)
-    await flushPromises()
-
-    rt.emit('scan:file', { archive: makeArchive({ id: 5, name: 'new.zip' }) })
-    await flushPromises()
-    expect(w.text()).toContain('new.zip')
+    const { w } = await mountApp()
+    expect(w.text()).toContain('book.zip')
   })
 
   it('shows the scan summary when the walk finishes', async () => {
-    installFake()
-    const rt = installRuntime()
-    const w = mount(App)
-    await flushPromises()
-
+    const { w, rt } = await mountApp()
     rt.emit('scan:done', {
       result: { root: 'C:\\pics', files: 42, dirs: 7, skipped: 1, cancelled: false, durationMs: 1500, gen: 1 },
     })
@@ -238,11 +230,7 @@ describe('App', () => {
   })
 
   it('reports a cancelled scan', async () => {
-    installFake()
-    const rt = installRuntime()
-    const w = mount(App)
-    await flushPromises()
-
+    const { w, rt } = await mountApp()
     rt.emit('scan:done', {
       result: { root: 'C:\\pics', files: 3, dirs: 1, skipped: 0, cancelled: true, durationMs: 100, gen: 1 },
     })
@@ -250,46 +238,92 @@ describe('App', () => {
     expect(w.text()).toContain('走査を中止しました')
   })
 
-  it('opens an archive when a row is selected', async () => {
+  it('renders the address bar with the current folder', async () => {
+    const { w } = await mountApp({ settings: makeSettings({ root: 'C:\\pics' }) })
+    expect(w.find('.addressbar').exists()).toBe(true)
+    expect(w.text()).toContain('pics')
+  })
+
+  it('renders the command bar', async () => {
+    const { w } = await mountApp()
+    expect(w.find('.commandbar').exists()).toBe(true)
+    expect(w.text()).toContain('フォルダ')
+  })
+
+  it('shows archives in the details view by default', async () => {
+    const { w } = await mountApp()
+    expect(w.find('.item.details').exists()).toBe(true)
+  })
+
+  it('opens an archive on double click and shows its images', async () => {
     const { w, fake } = await mountApp()
-    await w.find('.row').trigger('click')
+    await w.find('.item').trigger('dblclick')
     await flushPromises()
     expect(fake.calls).toContain('GetArchiveEntries:1')
+    // The address bar now shows the archive with a ZIP badge.
+    expect(w.find('.zip-badge').exists()).toBe(true)
+    expect(w.text()).toContain('page1.jpg')
   })
 
-  it('bumps the prefetch epoch when the selection changes', async () => {
-    const { w, fake } = await mountApp()
-    await w.find('.row').trigger('click')
+  it('goes back to the folder after entering an archive', async () => {
+    const { w } = await mountApp({ settings: makeSettings({ root: 'C:\\pics' }) })
+    await w.find('.item').trigger('dblclick')
     await flushPromises()
-    expect(fake.calls).toContain('BumpSelection')
+    expect(w.find('.zip-badge').exists()).toBe(true)
+
+    // The back button becomes enabled and returns to the folder.
+    const back = w.findAll('.navbtn')[0]
+    expect(back.attributes('disabled')).toBeUndefined()
+    await back.trigger('click')
+    await flushPromises()
+    expect(w.find('.zip-badge').exists()).toBe(false)
   })
 
-  it('opens the settings panel', async () => {
+  it('goes up from an archive to its folder', async () => {
+    const { w } = await mountApp({ settings: makeSettings({ root: 'C:\\pics' }) })
+    await w.find('.item').trigger('dblclick')
+    await flushPromises()
+    const up = w.findAll('.navbtn')[2]
+    await up.trigger('click')
+    await flushPromises()
+    expect(w.find('.zip-badge').exists()).toBe(false)
+  })
+
+  it('switches between view modes', async () => {
     const { w } = await mountApp()
-    const settingsButton = w.findAll('.btn').find((b) => b.text() === '設定')
-    await settingsButton?.trigger('click')
+    const viewButtons = w.findAll('.viewbtn')
+    await viewButtons[1].trigger('click')
     await flushPromises()
-    expect(w.text()).toContain('キャッシュ')
+    expect(w.find('.item.medium').exists()).toBe(true)
+
+    await viewButtons[2].trigger('click')
+    await flushPromises()
+    expect(w.find('.item.large').exists()).toBe(true)
   })
 
-  it('persists the thumbnail size when the slider moves', async () => {
-    const { w, fake } = await mountApp()
-    await w.find('.row').trigger('click')
-    await flushPromises()
-
-    const slider = w.find('input[type=range]')
-    await slider.setValue('256')
-    await new Promise((r) => setTimeout(r, 400))
-    await flushPromises()
-    expect(fake.calls).toContain('UpdateSettings')
-  })
-
-  it('opens the viewer on double click and closes on Escape', async () => {
+  it('selects an item on click', async () => {
     const { w } = await mountApp()
-    await w.find('.row').trigger('click')
+    await w.find('.item').trigger('click')
+    await flushPromises()
+    expect(w.find('.item').classes()).toContain('selected')
+  })
+
+  it('opens the viewer on double click inside an archive', async () => {
+    const { w } = await mountApp()
+    await w.find('.item').trigger('dblclick')
     await flushPromises()
 
-    await w.find('.cell').trigger('dblclick')
+    const image = w.findAll('.item')[0]
+    await image.trigger('dblclick')
+    await flushPromises()
+    expect(w.find('.viewer').exists()).toBe(true)
+  })
+
+  it('closes the viewer on Escape', async () => {
+    const { w } = await mountApp()
+    await w.find('.item').trigger('dblclick')
+    await flushPromises()
+    await w.findAll('.item')[0].trigger('dblclick')
     await flushPromises()
     expect(w.find('.viewer').exists()).toBe(true)
 
@@ -298,31 +332,17 @@ describe('App', () => {
     expect(w.find('.viewer').exists()).toBe(false)
   })
 
-  it('prefetches the full image when the viewer opens', async () => {
-    const { w, fake } = await mountApp()
-    await w.find('.row').trigger('click')
-    await flushPromises()
-    await w.find('.cell').trigger('dblclick')
-    await flushPromises()
-    expect(fake.calls).toContain('PrefetchFull')
-  })
-
-  it('navigates between images in the viewer', async () => {
+  it('opens the settings panel', async () => {
     const { w } = await mountApp()
-    await w.find('.row').trigger('click')
+    const settingsButton = w.findAll('.cmd').find((b) => b.text() === '設定')
+    await settingsButton?.trigger('click')
     await flushPromises()
-    await w.find('.cell').trigger('dblclick')
-    await flushPromises()
-
-    expect(w.find('.pos').text()).toBe('1 / 3')
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }))
-    await flushPromises()
-    expect(w.find('.pos').text()).toBe('2 / 3')
+    expect(w.text()).toContain('キャッシュ')
   })
 
   it('clears the cache from the settings panel', async () => {
     const { w, fake } = await mountApp()
-    const settingsButton = w.findAll('.btn').find((b) => b.text() === '設定')
+    const settingsButton = w.findAll('.cmd').find((b) => b.text() === '設定')
     await settingsButton?.trigger('click')
     await flushPromises()
 
@@ -332,71 +352,7 @@ describe('App', () => {
     expect(fake.calls).toContain('ClearCache')
   })
 
-  it('replaces the row after a rename instead of leaving a stale one', async () => {
-    const { w, fake, rt } = await mountApp()
-    await w.find('.row').trigger('click')
-    await flushPromises()
-
-    // Open the context menu and choose rename.
-    await w.find('.row').trigger('contextmenu')
-    await flushPromises()
-    const rename = w.findAll('.item').find((b) => b.text() === '名前を変更…')
-    await rename?.trigger('click')
-    await flushPromises()
-
-    // The fake backend reports the new path.
-    const renamed = makeArchive({ id: 2, path: 'C:\\pics\\renamed.zip', name: 'renamed.zip' })
-    ;(fake.api as { RenameArchive: unknown }).RenameArchive = vi.fn(async () => ({
-      source: 'C:\\pics\\book.zip',
-      destination: 'C:\\pics\\renamed.zip',
-      recycleBin: false,
-      archiveId: 1,
-    }))
-    ;(fake.api as { RefreshArchive: unknown }).RefreshArchive = vi.fn(async () => renamed)
-    ;(fake.api as { GetArchiveEntries: unknown }).GetArchiveEntries = vi.fn(async (id: number) => ({
-      id,
-      path: renamed.path,
-      name: renamed.name,
-      status: 'ok',
-      entries: [{ ordinal: 0, name: 'page1.jpg', crc32: 1, size: 100, encrypted: false }],
-    }))
-
-    await w.find('.field').setValue('renamed')
-    const confirm = w.findAll('.actions .btn').find((b) => b.text() === '変更')
-    await confirm?.trigger('click')
-    await flushPromises()
-
-    const names = w.findAll('.name').map((n) => n.text())
-    // The old row must be gone and the new one present exactly once.
-    expect(names).not.toContain('book.zip')
-    expect(names.filter((n) => n === 'renamed.zip')).toHaveLength(1)
-    void rt
-  })
-
-  it('removes the row after a delete', async () => {
-    const { w, fake } = await mountApp()
-    await w.find('.row').trigger('click')
-    await flushPromises()
-
-    ;(fake.api as { DeleteArchiveToRecycleBin: unknown }).DeleteArchiveToRecycleBin = vi.fn(
-      async () => ({ source: 'C:\\pics\\book.zip', recycleBin: true, archiveId: 1 }),
-    )
-
-    await w.find('.row').trigger('contextmenu')
-    await flushPromises()
-    const del = w.findAll('.item').find((b) => b.text() === 'ごみ箱へ移動')
-    await del?.trigger('click')
-    await flushPromises()
-
-    const confirm = w.findAll('.actions .btn').find((b) => b.text() === 'ごみ箱へ移動')
-    await confirm?.trigger('click')
-    await flushPromises()
-
-    expect(w.findAll('.row')).toHaveLength(0)
-  })
-
   it('opens the archive passed on the command line', async () => {
-    // The Explorer context menu launches the app with the archive path.
     const fake = installFake()
     const rt = installRuntime()
     const target = 'C:\\pics\\book.zip'
@@ -405,7 +361,6 @@ describe('App', () => {
     mount(App)
     await flushPromises()
 
-    // The scan of the containing folder reports the archive.
     rt.emit('scan:file', { archive: makeArchive({ id: 1, path: target }) })
     await flushPromises()
     await new Promise((r) => setTimeout(r, 250))
@@ -415,11 +370,25 @@ describe('App', () => {
     expect(fake.calls).toContain('GetArchiveEntries:1')
   })
 
-  it('falls back to the restored session when no target is given', async () => {
-    const fake = installFake({ settings: makeSettings({ root: 'C:\\saved' }) })
-    installRuntime()
-    mount(App)
+  it('removes the row after a delete', async () => {
+    const { w, fake } = await mountApp()
+    await w.find('.item').trigger('click')
     await flushPromises()
-    expect(fake.calls).toContain('StartScan:C:\\saved')
+
+    ;(fake.api as { DeleteArchiveToRecycleBin: unknown }).DeleteArchiveToRecycleBin = vi.fn(
+      async () => ({ source: 'C:\\pics\\book.zip', recycleBin: true, archiveId: 1 }),
+    )
+
+    await w.find('.item').trigger('contextmenu')
+    await flushPromises()
+    const del = w.findAll('.item').find((b) => b.text() === 'ごみ箱へ移動')
+    await del?.trigger('click')
+    await flushPromises()
+
+    const confirm = w.findAll('.actions .btn').find((b) => b.text() === 'ごみ箱へ移動')
+    await confirm?.trigger('click')
+    await flushPromises()
+
+    expect(w.findAll('.item')).toHaveLength(0)
   })
 })

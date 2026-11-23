@@ -93,6 +93,10 @@ func isArchiveExt(path string) bool {
 // overwrite an existing file, refuses to move a file onto itself, and requires
 // the destination to stay inside the scanned root so a stray call cannot
 // scatter files across the disk.
+//
+// A same-volume move is a single rename. A cross-volume move falls back to a
+// verified copy: the bytes are compared against the source before the original
+// is removed, so a failed or truncated copy can never lose the archive.
 func (a *App) MoveArchive(id int64, destDir string) (OrganizeResult, error) {
 	oa, err := a.lookup(id)
 	if err != nil {
@@ -115,12 +119,10 @@ func (a *App) MoveArchive(id int64, destDir string) (OrganizeResult, error) {
 		return OrganizeResult{}, fmt.Errorf("app: destination is not a directory")
 	}
 
-	root := a.cfg.Get().Root
-	if root != "" {
-		rootAbs, err := filepath.Abs(root)
-		if err == nil && !isWithin(rootAbs, destDir) {
-			return OrganizeResult{}, ErrOutsideRoot
-		}
+	// Compare the resolved paths so a junction or symlink cannot be used to
+	// place the file outside the scanned root.
+	if err := a.checkWithinRoot(destDir); err != nil {
+		return OrganizeResult{}, err
 	}
 
 	dest := filepath.Join(destDir, filepath.Base(src))
@@ -138,11 +140,8 @@ func (a *App) MoveArchive(id int64, destDir string) (OrganizeResult, error) {
 	// file locked.
 	a.releaseArchive(id)
 
-	if err := os.Rename(src, dest); err != nil {
-		// A cross-volume move cannot be a rename; fall back to copy+delete.
-		if err := copyThenRemove(src, dest); err != nil {
-			return OrganizeResult{}, err
-		}
+	if err := moveFile(src, dest); err != nil {
+		return OrganizeResult{}, err
 	}
 
 	// The old path is gone, so its cache rows are meaningless.
@@ -150,6 +149,51 @@ func (a *App) MoveArchive(id int64, destDir string) (OrganizeResult, error) {
 		return OrganizeResult{}, err
 	}
 	return OrganizeResult{Source: src, Destination: dest, ArchiveID: id}, nil
+}
+
+// checkWithinRoot rejects a destination that resolves outside the scanned root.
+// When no root is configured the check is skipped, because there is nothing to
+// constrain the destination to.
+func (a *App) checkWithinRoot(destDir string) error {
+	root := a.cfg.Get().Root
+	if root == "" {
+		return nil
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return nil
+	}
+	// A root that no longer resolves (an unplugged drive) cannot be compared;
+	// fall back to the lexical check rather than blocking the move.
+	rootReal, err := resolveRealPath(rootAbs)
+	if err != nil {
+		rootReal = rootAbs
+	}
+	destReal, err := resolveRealPath(destDir)
+	if err != nil {
+		return fmt.Errorf("app: resolve destination: %w", err)
+	}
+	if !isWithin(rootReal, destReal) {
+		return ErrOutsideRoot
+	}
+	return nil
+}
+
+// moveFile renames src to dest, falling back to a verified copy only when the
+// rename failed for a reason that a copy can solve.
+//
+// A rename fails across volumes with ERROR_NOT_SAME_DEVICE. Every other failure
+// (permission, lock, missing path) would fail the copy too, so it is returned
+// as-is instead of being retried and reported as a copy error.
+func moveFile(src, dest string) error {
+	err := os.Rename(src, dest)
+	if err == nil {
+		return nil
+	}
+	if !isCrossDevice(err) {
+		return fmt.Errorf("app: move %s: %w", filepath.Base(src), err)
+	}
+	return copyVerified(src, dest)
 }
 
 // DeleteArchiveToRecycleBin moves an archive to the Recycle Bin. The file is
@@ -226,40 +270,6 @@ func isWithin(root, path string) bool {
 		return false
 	}
 	return rel == "." || (!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != "..")
-}
-
-// copyThenRemove copies src to dest and removes src, used when a rename crosses
-// a volume boundary. The copy is written to a temporary file first so a failure
-// never leaves a truncated archive behind.
-func copyThenRemove(src, dest string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-
-	tmp, err := os.CreateTemp(filepath.Dir(dest), ".move-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-
-	if _, err := tmp.ReadFrom(in); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpName, dest); err != nil {
-		return err
-	}
-	return os.Remove(src)
 }
 
 // OrganizeCapabilities reports what the current build supports, so the UI can

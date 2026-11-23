@@ -78,14 +78,108 @@ jobs:
       - name: Render Markdown to HTML
         run: |
           set -euo pipefail
-          # pandoc is preinstalled on the runner image.
-          pandoc _site/privacy.md \
-            --from gfm --to html5 --standalone \
-            --metadata title="ZipScope プライバシーポリシー" \
-            --metadata lang=ja \
-            --css style.css \
-            -o _site/privacy.html
-          rm _site/privacy.md
+          # pandoc is not on the runner image, so the Markdown is converted with
+          # a small Python script instead of adding a toolchain dependency.
+          python3 - <<'PY'
+          import html
+          import re
+          from pathlib import Path
+
+          src = Path('_site/privacy.md').read_text(encoding='utf-8')
+          out = []
+          in_table = False
+          in_list = False
+
+          def close_blocks():
+              global in_table, in_list
+              if in_table:
+                  out.append('</tbody></table>')
+                  in_table = False
+              if in_list:
+                  out.append('</ul>')
+                  in_list = False
+
+          def inline(text):
+              # Escape first, then apply the inline markup the policy uses.
+              text = html.escape(text, quote=False)
+              text = re.sub(r'`([^`]+)`', r'<code>\1</code>', text)
+              text = re.sub(r'\*\*([^*]+)\*\*', r'<strong>\1</strong>', text)
+              text = re.sub(r'\[([^\]]+)\]\((https?://[^)]+)\)',
+                            r'<a href="\2">\1</a>', text)
+              # Bare URLs become links.
+              text = re.sub(r'(?<!["=>])(https?://[^\s<]+)',
+                            r'<a href="\1">\1</a>', text)
+              return text
+
+          for raw in src.splitlines():
+              line = raw.rstrip()
+
+              if not line.strip():
+                  close_blocks()
+                  continue
+
+              if line.startswith('|'):
+                  cells = [c.strip() for c in line.strip('|').split('|')]
+                  if all(re.fullmatch(r':?-{2,}:?', c) for c in cells if c):
+                      continue  # separator row
+                  if not in_table:
+                      close_blocks()
+                      out.append('<table><thead>')
+                      out.append('<tr>' + ''.join(f'<th>{inline(c)}</th>' for c in cells) + '</tr>')
+                      out.append('</thead><tbody>')
+                      in_table = True
+                  else:
+                      out.append('<tr>' + ''.join(f'<td>{inline(c)}</td>' for c in cells) + '</tr>')
+                  continue
+
+              if line.startswith('- '):
+                  if not in_list:
+                      close_blocks()
+                      out.append('<ul>')
+                      in_list = True
+                  out.append(f'<li>{inline(line[2:])}</li>')
+                  continue
+
+              if line.startswith('### '):
+                  close_blocks()
+                  out.append(f'<h3>{inline(line[4:])}</h3>')
+                  continue
+              if line.startswith('## '):
+                  close_blocks()
+                  out.append(f'<h2>{inline(line[3:])}</h2>')
+                  continue
+              if line.startswith('# '):
+                  close_blocks()
+                  out.append(f'<h1>{inline(line[2:])}</h1>')
+                  continue
+              if line.strip() == '---':
+                  close_blocks()
+                  out.append('<hr>')
+                  continue
+
+              close_blocks()
+              out.append(f'<p>{inline(line)}</p>')
+
+          close_blocks()
+
+          page = f"""<!doctype html>
+          <html lang="ja">
+          <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>ZipScope プライバシーポリシー</title>
+          <link rel="stylesheet" href="style.css">
+          </head>
+          <body>
+          {chr(10).join(out)}
+          </body>
+          </html>
+          """
+          Path('_site/privacy.html').write_text(page, encoding='utf-8')
+          Path('_site/privacy.md').unlink()
+          print('rendered privacy.html')
+          PY
+
           cat > _site/style.css <<'CSS'
           :root { color-scheme: dark; }
           body {
@@ -104,6 +198,10 @@ jobs:
           code { background: #1a1a1e; padding: .1rem .35rem; border-radius: 3px; font-size: .9em; }
           hr { border: none; border-top: 1px solid #2c2c33; margin: 2.5rem 0; }
           CSS
+
+          # Fail the build rather than deploy an empty page.
+          test -s _site/privacy.html
+          test -s _site/index.html
 
       - uses: actions/upload-pages-artifact@v3
         with:

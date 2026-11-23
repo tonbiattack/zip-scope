@@ -33,6 +33,10 @@ var (
 	ErrTruncated = errors.New("archive: entry data truncated")
 	// ErrNoImages reports an archive that contains no usable image entries.
 	ErrNoImages = errors.New("archive: no image entries")
+	// ErrArchiveChanged reports that the archive on disk no longer matches the
+	// index this handle was built from. The caller must re-index before
+	// reading, because the requested ordinal may now be a different image.
+	ErrArchiveChanged = errors.New("archive: file changed since it was indexed")
 )
 
 // EntryError attaches the offending entry name to a sentinel error so the UI

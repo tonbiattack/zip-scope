@@ -85,6 +85,8 @@ export function errorKindLabel(kind: string): string {
       return '画素数超過'
     case 'missing':
       return 'なし'
+    case 'changed':
+      return '更新あり'
     default:
       return '読込失敗'
   }

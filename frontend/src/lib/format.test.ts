@@ -95,6 +95,7 @@ describe('errorKindLabel', () => {
     expect(errorKindLabel('too-large')).toBe('サイズ超過')
     expect(errorKindLabel('too-many-pixels')).toBe('画素数超過')
     expect(errorKindLabel('missing')).toBe('なし')
+    expect(errorKindLabel('changed')).toBe('更新あり')
     expect(errorKindLabel('whatever')).toBe('読込失敗')
   })
 })

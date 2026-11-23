@@ -40,7 +40,8 @@ type ImageError struct {
 
 func (e *ImageError) Error() string { return e.Message }
 
-// Error kinds reported to the UI.
+// ErrKindChanged reports that the archive was modified after it was indexed.
+// The UI shows a reload prompt rather than a broken image.
 const (
 	ErrKindEncrypted   = "encrypted"
 	ErrKindCorrupt     = "corrupt"
@@ -48,6 +49,7 @@ const (
 	ErrKindTooLarge    = "too-large"
 	ErrKindTooManyPix  = "too-many-pixels"
 	ErrKindMissing     = "missing"
+	ErrKindChanged     = "changed"
 	ErrKindUnknown     = "unknown"
 )
 
@@ -61,6 +63,8 @@ func classifyImageError(err error) *ImageError {
 	}
 	kind := ErrKindUnknown
 	switch {
+	case errors.Is(err, archive.ErrArchiveChanged):
+		kind = ErrKindChanged
 	case errors.Is(err, archive.ErrEncrypted):
 		kind = ErrKindEncrypted
 	case errors.Is(err, archive.ErrChecksum), errors.Is(err, archive.ErrCorrupt),
@@ -102,7 +106,7 @@ func (a *App) thumbKey(arc *archive.Archive, ordinal, width int) (thumb.Key, boo
 // the result is validated before it is served: a cache file that no longer
 // decodes as an image is treated as a miss and regenerated.
 func (a *App) Thumbnail(id int64, ordinal, width int) (*ImageResponse, error) {
-	oa, err := a.lookup(id)
+	oa, reindexed, err := a.reindexIfChanged(id)
 	if err != nil {
 		return nil, classifyImageError(err)
 	}
@@ -129,6 +133,11 @@ func (a *App) Thumbnail(id int64, ordinal, width int) (*ImageResponse, error) {
 		return a.generateThumbnail(oa.arc, key, keyStr, ordinal, width)
 	})
 	if err != nil {
+		// A change detected mid-read means the index went stale again; retry
+		// once against the fresh index rather than surfacing a transient error.
+		if !reindexed && errors.Is(err, archive.ErrArchiveChanged) {
+			return a.Thumbnail(id, ordinal, width)
+		}
 		return nil, err
 	}
 	resp, ok := v.(*ImageResponse)
@@ -201,7 +210,7 @@ func validateThumb(data []byte) (string, int, int, bool) {
 // full-size viewer displays. The bytes are the archive's own data, so no
 // re-encoding loss is introduced.
 func (a *App) FullImage(id int64, ordinal int) (*ImageResponse, error) {
-	oa, err := a.lookup(id)
+	oa, reindexed, err := a.reindexIfChanged(id)
 	if err != nil {
 		return nil, classifyImageError(err)
 	}
@@ -213,6 +222,11 @@ func (a *App) FullImage(id int64, ordinal int) (*ImageResponse, error) {
 	}
 	data, err := oa.arc.ReadEntry(ordinal)
 	if err != nil {
+		// The archive changed between the check and the read; retry once
+		// against the fresh index so the user sees the new image.
+		if !reindexed && errors.Is(err, archive.ErrArchiveChanged) {
+			return a.FullImage(id, ordinal)
+		}
 		return nil, classifyImageError(err)
 	}
 	// Validate the header before handing the bytes to the WebView so an
@@ -228,6 +242,39 @@ func (a *App) FullImage(id int64, ordinal int) (*ImageResponse, error) {
 	resp := &ImageResponse{Data: data, ContentType: ct, Width: info.Width, Height: info.Height}
 	a.mem.Put(cacheKey, int64(len(data)), resp)
 	return resp, nil
+}
+
+// reindexIfChanged checks whether the archive behind id was modified on disk
+// and, if so, replaces the cached handle with a fresh index.
+//
+// It returns the handle to use and whether a re-index happened. Callers retry
+// their read once after a change, so a file replaced between indexing and
+// reading shows the new contents instead of an error or, worse, a different
+// image under the old ordinal.
+func (a *App) reindexIfChanged(id int64) (*openArchive, bool, error) {
+	oa, err := a.lookup(id)
+	if err != nil {
+		return nil, false, err
+	}
+	if !oa.arc.Changed() {
+		return oa, false, nil
+	}
+
+	// Re-index from disk. The archive id is preserved because it is the row id,
+	// so the UI keeps its selection.
+	fresh, err := archive.Open(oa.path, a.limits())
+	if err != nil {
+		return nil, true, err
+	}
+	a.mu.Lock()
+	oa.arc = fresh
+	oa.lastUse = time.Now()
+	a.mu.Unlock()
+
+	// The old thumbnails are keyed by the old fingerprint, so they are already
+	// unreachable; drop the memory copies so nothing stale is served.
+	a.mem.Clear()
+	return oa, true, nil
 }
 
 // decodeEntry decodes one entry while charging the decode working set against

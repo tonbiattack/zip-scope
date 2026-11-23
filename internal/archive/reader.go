@@ -247,6 +247,12 @@ func (a *Archive) IndexOfOrdinal(ordinal int) int {
 // ReadEntry streams one entry and returns its uncompressed bytes. The byte
 // limit is enforced both from the header and while reading, so a lying header
 // cannot exhaust memory.
+//
+// The archive is reopened for every read, so the file may have changed since it
+// was indexed. Before returning anything, the entry at ordinal is checked
+// against the identity recorded at index time: if the name, CRC or size differ,
+// the archive was replaced and the caller is told with ErrArchiveChanged rather
+// than being handed a different image.
 func (a *Archive) ReadEntry(ordinal int) ([]byte, error) {
 	zr, err := zip.OpenReader(a.path)
 	if err != nil {
@@ -255,10 +261,57 @@ func (a *Archive) ReadEntry(ordinal int) ([]byte, error) {
 	defer zr.Close()
 
 	if ordinal < 0 || ordinal >= len(zr.File) {
-		return nil, entryErr("", ErrCorrupt)
+		return nil, entryErr("", ErrArchiveChanged)
+	}
+
+	// The ordinal must still point at the entry that was indexed. A replaced
+	// archive can have the same entry count with different contents, so the
+	// identity is compared rather than the position alone.
+	want, ok := a.entryByOrdinal(ordinal)
+	if !ok {
+		return nil, entryErr("", ErrArchiveChanged)
 	}
 	f := zr.File[ordinal]
+	if f.Name != want.Name || f.CRC32 != want.CRC32 ||
+		f.UncompressedSize64 != want.UncompressedSize {
+		return nil, entryErr(want.Name, ErrArchiveChanged)
+	}
+
 	return a.readFile(f)
+}
+
+// entryByOrdinal returns the indexed entry with the given central-directory
+// ordinal.
+func (a *Archive) entryByOrdinal(ordinal int) (Entry, bool) {
+	for i := range a.entries {
+		if a.entries[i].Ordinal == ordinal {
+			return a.entries[i], true
+		}
+	}
+	return Entry{}, false
+}
+
+// Changed reports whether the archive on disk no longer matches the index this
+// handle was built from. It is cheap enough to call before a batch of reads:
+// the size and modification time are compared first, and only a mismatch in
+// those triggers a full re-index comparison.
+func (a *Archive) Changed() bool {
+	fi, err := os.Stat(a.path)
+	if err != nil {
+		// A missing file is a change: the archive was moved or the drive was
+		// unplugged.
+		return true
+	}
+	if fi.Size() != a.size || !fi.ModTime().Equal(a.mtime) {
+		return true
+	}
+	// Size and mtime can be preserved by a tool that rewrites the file, so the
+	// central directory is compared as well.
+	fresh, err := Open(a.path, a.limits)
+	if err != nil {
+		return true
+	}
+	return fresh.Fingerprint() != a.fingerprint
 }
 
 func (a *Archive) readFile(f *zip.File) ([]byte, error) {

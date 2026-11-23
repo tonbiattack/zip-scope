@@ -70,14 +70,36 @@ func (h *jobHeap) Pop() any {
 	return j
 }
 
+// waiter is one caller waiting for a job's result. The epoch is recorded so a
+// result produced for an older selection is never delivered to a caller that
+// asked for a newer one.
+type waiter struct {
+	epoch uint64
+	done  func(value any, err error)
+}
+
 // Scheduler runs jobs on a fixed worker pool.
+//
+// State transitions, all under mu:
+//
+//	Submit        -> pending[key] = job, queue push
+//	worker pops   -> delete(pending, key), running[key] = true
+//	worker done   -> delete(running, key), deliver or discard waiters[key]
+//	BumpEpoch     -> epoch++, drop queued non-sticky jobs and their waiters
+//
+// A key is in at most one of pending and running. Waiters accumulate under the
+// key for as long as the job is queued or running, and are drained exactly once
+// when the job finishes.
 type Scheduler struct {
 	mu      sync.Mutex
 	cond    *sync.Cond
 	queue   jobHeap
 	pending map[string]*Job
-	running map[string]bool
-	waiters map[string][]func(any, error)
+	// running maps a key to the epoch of the job currently executing it, so a
+	// new request can tell whether the in-flight work belongs to a selection
+	// that has already been superseded.
+	running map[string]uint64
+	waiters map[string][]waiter
 	closed  bool
 	epoch   uint64
 	workers int
@@ -99,8 +121,8 @@ func NewScheduler(workers int) *Scheduler {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Scheduler{
 		pending: make(map[string]*Job),
-		running: make(map[string]bool),
-		waiters: make(map[string][]func(any, error)),
+		running: make(map[string]uint64),
+		waiters: make(map[string][]waiter),
 		workers: workers,
 		ctx:     ctx,
 		cancel:  cancel,
@@ -146,6 +168,10 @@ func (s *Scheduler) BumpEpoch() uint64 {
 
 // Submit enqueues a job. If a job with the same key is already queued or
 // running, the new Done callback is attached to it instead of running twice.
+//
+// A job from an older epoch cannot satisfy a caller from a newer one: its
+// result is about to be discarded. In that case the old job is cancelled and
+// replaced, so the new request is guaranteed to run and to be notified.
 func (s *Scheduler) Submit(j *Job) error {
 	if j == nil || j.Run == nil {
 		return errors.New("prefetch: job has no Run function")
@@ -158,28 +184,68 @@ func (s *Scheduler) Submit(j *Job) error {
 	if j.Epoch == 0 {
 		j.Epoch = s.epoch
 	}
-	if j.Done != nil {
-		s.waiters[j.Key] = append(s.waiters[j.Key], j.Done)
-	}
-	if s.running[j.Key] {
+
+	// A running job from an older epoch will have its result discarded, so a
+	// waiter from the current epoch must not be attached to it. The old job is
+	// left to finish (it cannot be interrupted safely) but its waiters are
+	// dropped, and the new job is queued to run afterwards.
+	if runningEpoch, ok := s.running[j.Key]; ok {
+		if runningEpoch != j.Epoch {
+			s.dropWaitersLocked(j.Key)
+			s.deduped.Add(1)
+			s.enqueueLocked(j)
+			return nil
+		}
+		s.addWaiterLocked(j)
 		s.deduped.Add(1)
 		return nil
 	}
+
 	if existing, ok := s.pending[j.Key]; ok {
-		if j.Priority < existing.Priority {
+		// A queued job can be upgraded in place when the new request is more
+		// urgent, or when it comes from a newer epoch and the old one would be
+		// discarded anyway.
+		if j.Priority < existing.Priority || s.isStaleEpoch(existing.Epoch) {
 			existing.Priority = j.Priority
 			existing.Epoch = j.Epoch
 			existing.Run = j.Run
 			existing.Sticky = existing.Sticky || j.Sticky
 			heap.Init(&s.queue)
 		}
+		s.addWaiterLocked(j)
 		s.deduped.Add(1)
 		return nil
 	}
+
+	s.enqueueLocked(j)
+	return nil
+}
+
+// isStaleEpoch reports whether epoch belongs to a selection that has already
+// been superseded. Callers must hold mu.
+func (s *Scheduler) isStaleEpoch(epoch uint64) bool {
+	return epoch != s.epoch
+}
+
+// addWaiterLocked records a caller's callback for key. Callers must hold mu.
+func (s *Scheduler) addWaiterLocked(j *Job) {
+	if j.Done == nil {
+		return
+	}
+	s.waiters[j.Key] = append(s.waiters[j.Key], waiter{epoch: j.Epoch, done: j.Done})
+}
+
+// dropWaitersLocked forgets every waiter for key. Callers must hold mu.
+func (s *Scheduler) dropWaitersLocked(key string) {
+	delete(s.waiters, key)
+}
+
+// enqueueLocked puts a job on the queue. Callers must hold mu.
+func (s *Scheduler) enqueueLocked(j *Job) {
+	s.addWaiterLocked(j)
 	s.pending[j.Key] = j
 	heap.Push(&s.queue, j)
 	s.cond.Signal()
-	return nil
 }
 
 // Pending returns how many jobs are queued.
@@ -222,16 +288,16 @@ func (s *Scheduler) worker() {
 		}
 		j := heap.Pop(&s.queue).(*Job)
 		delete(s.pending, j.Key)
-		s.running[j.Key] = true
+		s.running[j.Key] = j.Epoch
 		epoch := s.epoch
 		s.mu.Unlock()
 
 		// A speculative job from an older selection is dropped before it costs
-		// any work.
+		// any work. Its waiters are kept: a newer request may have queued a
+		// replacement under the same key, and that job owns its own waiters.
 		if !j.Sticky && j.Epoch != epoch {
 			s.mu.Lock()
 			delete(s.running, j.Key)
-			delete(s.waiters, j.Key)
 			s.mu.Unlock()
 			s.discarded.Add(1)
 			continue
@@ -241,9 +307,25 @@ func (s *Scheduler) worker() {
 
 		s.mu.Lock()
 		delete(s.running, j.Key)
+		// Deliver only to callers whose epoch still matches the job's. A waiter
+		// that arrived from a newer selection is left for the replacement job
+		// rather than being handed a result about the old one.
+		all := s.waiters[j.Key]
+		var deliver []waiter
+		var keep []waiter
+		for _, w := range all {
+			if w.epoch == j.Epoch {
+				deliver = append(deliver, w)
+			} else {
+				keep = append(keep, w)
+			}
+		}
+		if len(keep) > 0 {
+			s.waiters[j.Key] = keep
+		} else {
+			delete(s.waiters, j.Key)
+		}
 		stale := !j.Sticky && j.Epoch != s.epoch
-		callbacks := s.waiters[j.Key]
-		delete(s.waiters, j.Key)
 		s.mu.Unlock()
 
 		if stale {
@@ -251,8 +333,8 @@ func (s *Scheduler) worker() {
 			continue
 		}
 		s.completed.Add(1)
-		for _, cb := range callbacks {
-			cb(value, err)
+		for _, w := range deliver {
+			w.done(value, err)
 		}
 	}
 }
@@ -267,7 +349,7 @@ func (s *Scheduler) Close() {
 	s.closed = true
 	s.queue = nil
 	s.pending = make(map[string]*Job)
-	s.waiters = make(map[string][]func(any, error))
+	s.waiters = make(map[string][]waiter)
 	s.cond.Broadcast()
 	s.mu.Unlock()
 

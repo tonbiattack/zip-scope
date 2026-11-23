@@ -17,6 +17,9 @@ ZIP を解凍せずに中央ディレクトリだけを読み、必要な画像�
 
 WebView2 ランタイムが必要です。Windows 11 には標準で入っています。
 
+Microsoft Store 版（MSIX）も用意しています。詳細と検証状況は
+[docs/MSIX.md](docs/MSIX.md) を参照してください。
+
 ## 操作
 
 エクスプローラーと同じ感覚で操作できるよう、フォルダと ZIP を同じ画面で行き来します。
@@ -325,7 +328,9 @@ internal/settings/          設定の永続化
 internal/bench/             合成データ生成と統計
 cmd/zipscope-bench/         ベンチマークコマンド
 shell/                      エクスプローラー統合（C++/COM）
+msix/                       Microsoft Store 用パッケージ定義
 scripts/make-icon.ps1       アイコン生成
+scripts/make-msix.ps1       MSIX パッケージ生成
 frontend/                   Vue 3 + TypeScript
 ```
 

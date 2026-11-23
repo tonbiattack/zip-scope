@@ -30,3 +30,10 @@ shell/obj-test/
 *.obj
 *.exp
 *.lib
+
+# MSIX build output
+build/msix/
+msix/Assets/
+*.msix
+*.pfx
+*.cer

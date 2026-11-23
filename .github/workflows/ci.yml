@@ -78,8 +78,63 @@ jobs:
       - name: Build
         run: wails build -clean -platform windows/amd64
 
+      - name: Build the Explorer extension
+        run: cmd /c shell\build.cmd
+
       - uses: actions/upload-artifact@v4
         with:
           name: ZipScope-windows-amd64
-          path: build/bin/ZipScope.exe
+          path: |
+            build/bin/ZipScope.exe
+            build/shell/ZipScopeShell.dll
+          if-no-files-found: error
+
+  msix:
+    name: MSIX package
+    runs-on: windows-latest
+    needs: [go, frontend]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.1
+
+      - name: Build the viewer and the extension
+        run: |
+          wails build -clean -platform windows/amd64
+          cmd /c shell\build.cmd
+
+      - name: Generate the icon and tile assets
+        run: |
+          pwsh -NoProfile -File scripts/make-icon.ps1
+          pwsh -NoProfile -File scripts/make-msix-assets.ps1
+
+      - name: Pack the MSIX
+        run: pwsh -NoProfile -File scripts/make-msix.ps1 -SkipBuild -Version 0.1.0.0
+
+      - name: Verify the package contents
+        run: |
+          $makeappx = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Recurse -Filter makeappx.exe |
+            Where-Object { $_.FullName -match 'x64' } | Sort-Object FullName -Descending | Select-Object -First 1
+          & $makeappx.FullName unpack /p build\msix\ZipScope_0.1.0.0_x64.msix /d build\msix\verify /o
+          if (-not (Test-Path 'build\msix\verify\AppxManifest.xml')) { throw 'manifest missing' }
+          if (-not (Test-Path 'build\msix\verify\ZipScope.exe')) { throw 'viewer missing' }
+          if (-not (Test-Path 'build\msix\verify\ZipScopeShell.dll')) { throw 'extension missing' }
+          Write-Host 'Package contents verified'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ZipScope-msix
+          path: build/msix/ZipScope_*_x64.msix
           if-no-files-found: error

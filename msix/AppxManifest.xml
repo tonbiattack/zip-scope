@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Package manifest for the Microsoft Store build of ZipScope.
+
+  This is a full-trust desktop package: the viewer is a Wails application and
+  the Explorer integration is an in-process COM DLL, neither of which can run
+  inside the UWP sandbox. EntryPoint="Windows.FullTrustApplication" is what
+  makes that explicit.
+
+  Two Explorer integrations are declared:
+
+  - desktop2:ThumbnailHandler, so a ZIP/CBZ shows its first image.
+  - desktop4:FileExplorerContextMenus, so "ZipScopeで開く" appears on the
+    classic context menu.
+
+  Both are registered through com:SurrogateServer rather than the registry,
+  because a packaged app cannot write HKEY_CLASSES_ROOT. The DLL itself is
+  unchanged: it still implements IThumbnailProvider and IContextMenu.
+
+  The context menu uses the classic handler because the app already implements
+  IContextMenu. Windows 11 shows it under "Show more options"; a native
+  IExplorerCommand would need a second implementation and would not work on
+  Windows 10.
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+  xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  xmlns:desktop2="http://schemas.microsoft.com/appx/manifest/desktop/windows10/2"
+  xmlns:desktop4="http://schemas.microsoft.com/appx/manifest/desktop/windows10/4"
+  xmlns:desktop9="http://schemas.microsoft.com/appx/manifest/desktop/windows10/9"
+  xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap uap3 uap10 desktop desktop2 desktop4 desktop9 com rescap">
+
+  <Identity
+    Name="tonbiattack.ZipScope"
+    Publisher="CN=tonbiattack"
+    Version="0.1.0.0"
+    ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>ZipScope</DisplayName>
+    <PublisherDisplayName>tonbiattack</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+    <Description>ZIP/CBZ を解凍せずに閲覧する画像ビューア</Description>
+  </Properties>
+
+  <Dependencies>
+    <!-- MaxVersionTested must exceed 10.0.21300.0 for the classic context menu
+         handler extension to be honoured. -->
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26100.0" />
+    <!-- The viewer renders with WebView2. Declaring it as a host runtime
+         dependency lets the Store install the runtime alongside the app. -->
+    <uap10:HostRuntimeDependency
+      Name="Microsoft.Win32WebView2"
+      MinVersion="92.0.902.78"
+      Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="ja-jp" />
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application Id="ZipScope" Executable="ZipScope.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="ZipScope"
+        Description="ZIP/CBZ を解凍せずに閲覧する画像ビューア"
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
+        <uap:SplashScreen Image="Assets\SplashScreen.png" />
+      </uap:VisualElements>
+
+      <Extensions>
+        <!-- The COM classes the Explorer integration exposes. -->
+        <com:Extension Category="windows.comServer">
+          <com:ComServer>
+            <com:SurrogateServer DisplayName="ZipScope Thumbnail Provider">
+              <com:Class Id="6F1B2A10-8C3D-4E57-9A21-5B7C0D3E8F41"
+                         Path="ZipScopeShell.dll"
+                         ThreadingModel="STA" />
+            </com:SurrogateServer>
+            <com:SurrogateServer DisplayName="ZipScope Context Menu">
+              <com:Class Id="6F1B2A11-8C3D-4E57-9A21-5B7C0D3E8F41"
+                         Path="ZipScopeShell.dll"
+                         ThreadingModel="STA" />
+            </com:SurrogateServer>
+          </com:ComServer>
+        </com:Extension>
+
+        <!-- File associations: this is what carries the thumbnail handler. -->
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="zipscope-zip">
+            <uap:DisplayName>ZIP アーカイブ</uap:DisplayName>
+            <uap:SupportedFileTypes>
+              <uap:FileType>.zip</uap:FileType>
+            </uap:SupportedFileTypes>
+            <desktop2:ThumbnailHandler Clsid="6F1B2A10-8C3D-4E57-9A21-5B7C0D3E8F41" />
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="zipscope-cbz">
+            <uap:DisplayName>CBZ コミックアーカイブ</uap:DisplayName>
+            <uap:SupportedFileTypes>
+              <uap:FileType>.cbz</uap:FileType>
+            </uap:SupportedFileTypes>
+            <desktop2:ThumbnailHandler Clsid="6F1B2A10-8C3D-4E57-9A21-5B7C0D3E8F41" />
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+
+        <!-- The classic context menu entry. -->
+        <desktop9:Extension Category="windows.fileExplorerClassicContextMenuHandler">
+          <desktop9:FileExplorerClassicContextMenuHandler>
+            <desktop9:ExtensionHandler Type=".zip" Clsid="6F1B2A11-8C3D-4E57-9A21-5B7C0D3E8F41" />
+            <desktop9:ExtensionHandler Type=".cbz" Clsid="6F1B2A11-8C3D-4E57-9A21-5B7C0D3E8F41" />
+          </desktop9:FileExplorerClassicContextMenuHandler>
+        </desktop9:Extension>
+
+        <!-- A command-line alias so "ZipScope" works from a terminal. -->
+        <uap3:Extension Category="windows.appExecutionAlias"
+                        Executable="ZipScope.exe"
+                        EntryPoint="Windows.FullTrustApplication">
+          <uap3:AppExecutionAlias>
+            <desktop:ExecutionAlias Alias="ZipScope.exe" />
+          </uap3:AppExecutionAlias>
+        </uap3:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <!-- The viewer reads archives from anywhere the user can reach, including
+         external drives, so it needs broad file system access. -->
+    <rescap:Capability Name="runFullTrust" />
+    <rescap:Capability Name="broadFileSystemAccess" />
+  </Capabilities>
+</Package>

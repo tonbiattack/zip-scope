@@ -3,6 +3,48 @@
 ZipScope を MSIX パッケージとして Microsoft Store で配布するための技術検証の記録です。
 GitHub Releases での EXE 配布は維持します。
 
+## Partner Center の確定値
+
+2026-11-23 にアプリ名 `ZipScope` の予約が完了し、以下の値が割り当てられました。
+これらは `msix/AppxManifest.xml` に反映済みで、`scripts/make-msix.ps1` からも上書きできます。
+
+| 項目 | 値 |
+| --- | --- |
+| ストア ID | `9PKL9QQXB65R` |
+| Package/Identity/Name | `tonbiattack.ZipScope` |
+| Package/Identity/Publisher | `CN=2F14A66E-02DF-43E2-93E0-5C5900B38D2E` |
+| PublisherDisplayName | `tonbiattack` |
+| Package Family Name | `tonbiattack.ZipScope_e28ksxe3fc9w4` |
+
+**Publisher は `CN=tonbiattack` ではありません。** Partner Center が発行する GUID 形式の値で、
+一致しないとアップロード時に弾かれます。
+
+Package Family Name は `Identity Name` と Publisher から決まります。
+生成したパッケージが正しい PFN を持つことは次のように確認できます。
+
+```powershell
+# 生成したマニフェストから PFN を計算し、Partner Center の値と比較する
+$name = 'tonbiattack.ZipScope'
+$publisher = 'CN=2F14A66E-02DF-43E2-93E0-5C5900B38D2E'
+# ... (scripts/verify-pfn.ps1 に実装)
+```
+
+## 提出用パッケージの生成
+
+```powershell
+# ビルド込みで提出用パッケージを生成
+pwsh scripts/make-msix.ps1 -Version 0.1.0.0
+
+# 生成物
+#   build/msix/ZipScope_0.1.0.0_x64.msix
+```
+
+バージョンは **4 要素**で、**第 4 要素は 0** である必要があります
+（Store が改訂番号を付けるため）。スクリプトはこれを検証し、違反時は停止します。
+
+**Store 提出用のパッケージは署名不要です。** Store が再署名します。
+`-Sign` はサイドロード検証用の自己署名にのみ使います。
+
 ## 結論
 
 **MSIX 化は可能です。** ビューア本体・エクスプローラー統合の両方がパッケージ方式で動作する見込みで、

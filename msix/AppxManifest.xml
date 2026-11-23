@@ -35,9 +35,17 @@
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
   IgnorableNamespaces="uap uap3 uap10 desktop desktop2 desktop4 desktop9 com rescap">
 
+  <!--
+    Identity values come from Partner Center and must match exactly, or the
+    upload is rejected. They are recorded in docs/MSIX.md and substituted by
+    scripts/make-msix.ps1 when a different identity is needed.
+
+    Store ID: 9PKL9QQXB65R
+    Package Family Name: tonbiattack.ZipScope_e28ksxe3fc9w4
+  -->
   <Identity
     Name="tonbiattack.ZipScope"
-    Publisher="CN=tonbiattack"
+    Publisher="CN=2F14A66E-02DF-43E2-93E0-5C5900B38D2E"
     Version="0.1.0.0"
     ProcessorArchitecture="x64" />
 

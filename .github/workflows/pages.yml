@@ -1,0 +1,121 @@
+name: Pages
+
+# Publishes the privacy policy and the store listing material to GitHub Pages.
+#
+# The Store requires a stable public URL for the privacy policy, so it is served
+# from this repository rather than an external host. Only the files listed in
+# the build step are published; the rest of the repository stays private to the
+# site.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/privacy.md'
+      - 'docs/store/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one deployment at a time; a newer push supersedes a queued one.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build the site
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble the site
+        run: |
+          set -euo pipefail
+          mkdir -p _site
+          # The privacy policy is the page the Store links to.
+          cp docs/privacy.md _site/privacy.md
+          # A minimal landing page so the site root is not a 404.
+          cat > _site/index.html <<'HTML'
+          <!doctype html>
+          <html lang="ja">
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>ZipScope</title>
+            <style>
+              :root { color-scheme: dark; }
+              body {
+                margin: 0; min-height: 100vh; display: grid; place-items: center;
+                background: #121214; color: #e6e6ea;
+                font-family: 'Segoe UI', 'Yu Gothic UI', system-ui, sans-serif;
+              }
+              main { max-width: 34rem; padding: 2rem; }
+              h1 { font-size: 1.6rem; margin: 0 0 .5rem; }
+              p { color: #9a9aa6; line-height: 1.7; }
+              a { color: #5a8cff; }
+              ul { line-height: 2; padding-left: 1.2rem; }
+            </style>
+          </head>
+          <body>
+            <main>
+              <h1>ZipScope</h1>
+              <p>ZIP / CBZ を解凍せずに閲覧する Windows 用の画像ビューア。</p>
+              <ul>
+                <li><a href="privacy.html">プライバシーポリシー</a></li>
+                <li><a href="https://github.com/tonbiattack/zip-scope">ソースコード</a></li>
+                <li><a href="https://github.com/tonbiattack/zip-scope/issues">サポート</a></li>
+              </ul>
+            </main>
+          </body>
+          </html>
+          HTML
+
+      - name: Render Markdown to HTML
+        run: |
+          set -euo pipefail
+          # pandoc is preinstalled on the runner image.
+          pandoc _site/privacy.md \
+            --from gfm --to html5 --standalone \
+            --metadata title="ZipScope プライバシーポリシー" \
+            --metadata lang=ja \
+            --css style.css \
+            -o _site/privacy.html
+          rm _site/privacy.md
+          cat > _site/style.css <<'CSS'
+          :root { color-scheme: dark; }
+          body {
+            margin: 0 auto; max-width: 46rem; padding: 2rem 1.25rem 4rem;
+            background: #121214; color: #e6e6ea;
+            font-family: 'Segoe UI', 'Yu Gothic UI', system-ui, sans-serif;
+            line-height: 1.8;
+          }
+          h1 { font-size: 1.6rem; border-bottom: 1px solid #2c2c33; padding-bottom: .6rem; }
+          h2 { font-size: 1.15rem; margin-top: 2.2rem; color: #fff; }
+          h3 { font-size: 1rem; margin-top: 1.6rem; }
+          a { color: #5a8cff; }
+          table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .92rem; }
+          th, td { border: 1px solid #2c2c33; padding: .5rem .7rem; text-align: left; }
+          th { background: #1a1a1e; }
+          code { background: #1a1a1e; padding: .1rem .35rem; border-radius: 3px; font-size: .9em; }
+          hr { border: none; border-top: 1px solid #2c2c33; margin: 2.5rem 0; }
+          CSS
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

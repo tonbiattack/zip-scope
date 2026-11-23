@@ -17,7 +17,12 @@ param(
     [switch]$Sign,
     [string]$CertPath,
     [string]$CertPassword,
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    # Identity values from Partner Center. The defaults are the values assigned
+    # to ZipScope on 2026-11-23; override them for a different reservation.
+    [string]$IdentityName = 'tonbiattack.ZipScope',
+    [string]$Publisher = 'CN=2F14A66E-02DF-43E2-93E0-5C5900B38D2E',
+    [string]$PublisherDisplayName = 'tonbiattack'
 )
 
 Set-StrictMode -Version Latest
@@ -27,6 +32,16 @@ $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $stage = Join-Path $root 'build\msix\stage'
 $outDir = Join-Path $root 'build\msix'
 $msixPath = Join-Path $outDir "ZipScope_${Version}_x64.msix"
+
+# The Store requires a four-part version, and the last part must be 0 so the
+# Store can append its own revision. Reject anything else before packing.
+if ($Version -notmatch '^\d+\.\d+\.\d+\.\d+$') {
+    throw "Version must have four parts, e.g. 0.1.0.0 (got '$Version')"
+}
+$parts = $Version.Split('.') | ForEach-Object { [int]$_ }
+if ($parts[3] -ne 0) {
+    throw "The fourth version part must be 0 for Store submission (got '$Version')"
+}
 
 # Locate the Windows SDK tools. They are not on PATH by default.
 function Find-SdkTool {
@@ -95,10 +110,35 @@ if (-not (Test-Path $assetsSrc)) {
 }
 Copy-Item $assetsSrc (Join-Path $stage 'Assets') -Recurse
 
-# The manifest carries the version, so it is rewritten rather than copied.
+# The manifest carries the identity and version, so it is rewritten rather than
+# copied. The Store rejects a package whose Identity does not match the
+# reservation exactly, so these values are substituted rather than hand-edited.
+#
+# The substitutions are anchored to the Identity element: a bare Version="..."
+# pattern would also rewrite TargetDeviceFamily's MinVersion and produce an
+# uninstallable package.
 $manifest = Get-Content (Join-Path $root 'msix\AppxManifest.xml') -Raw
-$manifest = $manifest -replace 'Version="\d+\.\d+\.\d+\.\d+"', "Version=`"$Version`""
+$manifest = $manifest -replace '(<Identity\s[^>]*?Version=")\d+\.\d+\.\d+\.\d+(")', "`${1}$Version`${2}"
+$manifest = $manifest -replace '(<Identity\s[^>]*?Name=")[^"]*(")', "`${1}$IdentityName`${2}"
+$manifest = $manifest -replace '(<Identity\s[^>]*?Publisher=")[^"]*(")', "`${1}$Publisher`${2}"
+$manifest = $manifest -replace '<PublisherDisplayName>[^<]*</PublisherDisplayName>',
+    "<PublisherDisplayName>$PublisherDisplayName</PublisherDisplayName>"
 Set-Content -Path (Join-Path $stage 'AppxManifest.xml') -Value $manifest -Encoding UTF8
+
+# Fail early if the substitution did not take, rather than at upload time.
+$written = Get-Content (Join-Path $stage 'AppxManifest.xml') -Raw
+foreach ($expected in @($IdentityName, $Publisher, $Version)) {
+    if ($written -notmatch [regex]::Escape($expected)) {
+        throw "manifest is missing the expected value: $expected"
+    }
+}
+# The device family version must not have been touched.
+if ($written -notmatch 'TargetDeviceFamily Name="Windows\.Desktop" MinVersion="10\.0\.') {
+    throw "TargetDeviceFamily MinVersion was corrupted by the version substitution"
+}
+Write-Host "Identity: $IdentityName"
+Write-Host "Publisher: $Publisher"
+Write-Host "Version: $Version"
 
 # --- pack ------------------------------------------------------------------
 

@@ -131,35 +131,34 @@ Add-AppxPackage -Path build\msix\ZipScope_0.1.0.0_x64.msix
 
 ## 掲載に必要な資料
 
-| 資料 | 状態 |
-| --- | --- |
-| パッケージ | 生成可（`scripts/make-msix.ps1`） |
-| タイル画像一式 | 生成可（`scripts/make-msix-assets.ps1`） |
-| スクリーンショット | **未作成**（実機で撮影が必要） |
-| ストア説明文 | **未作成**（下書きは下記） |
-| プライバシーポリシー | **未作成**（ネット通信なしの旨を明記） |
-| サポート URL | GitHub Issues を利用可 |
-| 年齢評価 | 全年齢（画像閲覧のみ） |
+| 資料 | 状態 | 場所 |
+| --- | --- | --- |
+| パッケージ | 生成可 | `scripts/make-msix.ps1` |
+| タイル画像一式 | 生成可 | `scripts/make-msix-assets.ps1` → `msix/Assets/` |
+| スクリーンショット | **作成済み**（1920×1080、4 枚） | `docs/store/screenshots/` |
+| ストア説明文 | **作成済み**（日英） | `docs/store/listing.md` |
+| プライバシーポリシー | **公開済み** | https://tonbiattack.github.io/zip-scope/privacy.html |
+| サポート URL | GitHub Issues | https://github.com/tonbiattack/zip-scope/issues |
+| 年齢評価 | 全年齢 | `docs/store/listing.md` |
 
-### 説明文の下書き
+掲載文・カテゴリ・キーワードなど、Partner Center の入力内容は
+[`docs/store/listing.md`](store/listing.md) にまとめています。
 
-> **ZipScope — ZIP の中を、フォルダのように見る**
->
-> ZIP や CBZ を解凍せずに、中の画像をそのまま閲覧できる Windows 用のビューアです。
-> 大量のアーカイブを扱うときも、サムネイルが素早く並び、クリックだけで読めます。
->
-> ・ZIP を展開しない — 中央ディレクトリだけを読み、必要な画像だけを取り出します
-> ・エクスプローラー統合 — ZIP のアイコンが表紙になり、右クリックから直接開けます
-> ・1万件でも軽快 — 画面内だけを描画する仮想スクロール
-> ・オフラインで完結 — ネット接続は一切行いません
->
-> 対応形式: ZIP / CBZ（Store / Deflate、ZIP64）、JPEG / PNG / GIF / WebP
+スクリーンショットのサンプルは `cmd/mkscreenshots` で生成します。
+図形のみを描画するため、第三者の著作物を含みません。
+
+```powershell
+go run ./cmd/mkscreenshots "$env:USERPROFILE\Pictures\ZipScope サンプル"
+```
 
 ## プライバシー
 
 ZipScope は**ネットワーク通信を行いません**。
 閲覧履歴・ファイルパス・画像は外部に送信されません。
 ローカルに保存されるのは `%LOCALAPPDATA%\ZipScope` のキャッシュ（SQLite とサムネイル）のみです。
+
+全文は公開済みです: https://tonbiattack.github.io/zip-scope/privacy.html
+ソースは [`docs/privacy.md`](privacy.md) で、`.github/workflows/pages.yml` が HTML に変換して公開します。
 
 ## 配布方式の比較
 
@@ -179,9 +178,16 @@ Releases 版は「すぐ試せる・審査を待たない」という役割分�
 pwsh scripts/make-icon.ps1
 pwsh scripts/make-msix-assets.ps1
 
-# 2. パッケージを生成（ビルド込み）
+# 2. 提出用パッケージを生成（ビルド込み）
 pwsh scripts/make-msix.ps1 -Version 0.1.0.0
 
-# 3. 署名してローカル検証
+# 3. Partner Center の ID と一致するか検証
+pwsh scripts/verify-pfn.ps1 -MsixPath build\msix\ZipScope_0.1.0.0_x64.msix
+
+# 4. サイドロード検証用に署名（管理者権限で証明書を信頼してから）
 pwsh scripts/make-msix.ps1 -Version 0.1.0.0 -Sign
 ```
+
+`verify-pfn.ps1` は生成物を展開し、Identity から Package Family Name を
+Windows と同じ方法で再計算して Partner Center の値と比較します。
+Publisher やバージョンがずれていれば、アップロード前に検出できます。

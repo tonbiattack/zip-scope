@@ -11,13 +11,31 @@ set OUT_DIR=%SCRIPT_DIR%..\build\shell
 set OBJ_DIR=%SCRIPT_DIR%obj
 
 REM Locate the Visual Studio build environment.
+REM
+REM vswhere is installed with every Visual Studio 2017+ edition and reports the
+REM real installation path, so this works for BuildTools, Community,
+REM Professional and Enterprise without hard-coding each layout. The fixed
+REM paths below are a fallback for machines where vswhere is missing.
 set VCVARS=
+set VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe
+if exist "%VSWHERE%" (
+  for /f "usebackq tokens=*" %%I in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do (
+    if exist "%%I\VC\Auxiliary\Build\vcvars64.bat" (
+      set VCVARS=%%I\VC\Auxiliary\Build\vcvars64.bat
+      goto :found
+    )
+  )
+)
+
 for %%P in (
-  "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
-  "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
-  "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
-  "C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvars64.bat"
   "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+  "C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvars64.bat"
+  "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
+  "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+  "C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+  "C:\Program Files (x86)\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvars64.bat"
+  "C:\Program Files (x86)\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
+  "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
 ) do (
   if exist %%P (
     set VCVARS=%%~P

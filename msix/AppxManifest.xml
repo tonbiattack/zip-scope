@@ -33,7 +33,8 @@
   xmlns:desktop9="http://schemas.microsoft.com/appx/manifest/desktop/windows10/9"
   xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-  IgnorableNamespaces="uap uap3 uap10 desktop desktop2 desktop4 desktop9 com rescap">
+  xmlns:win32dependencies="http://schemas.microsoft.com/appx/manifest/externaldependencies"
+  IgnorableNamespaces="uap uap3 uap10 desktop desktop2 desktop4 desktop9 com rescap win32dependencies">
 
   <!--
     Identity values come from Partner Center and must match exactly, or the
@@ -57,15 +58,32 @@
   </Properties>
 
   <Dependencies>
-    <!-- MaxVersionTested must exceed 10.0.21300.0 for the classic context menu
-         handler extension to be honoured. -->
-    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26100.0" />
-    <!-- The viewer renders with WebView2. Declaring it as a host runtime
-         dependency lets the Store install the runtime alongside the app. -->
-    <uap10:HostRuntimeDependency
-      Name="Microsoft.Win32WebView2"
+    <!--
+      MinVersion 10.0.19041.0 (Windows 10 version 2004) is the floor for
+      uap10:RuntimeBehavior and uap10:TrustLevel, which the Application element
+      now uses. MaxVersionTested must exceed 10.0.21300.0 for the classic
+      context menu handler extension to be honoured.
+    -->
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" />
+    <!--
+      The viewer renders with WebView2, which is not part of Windows 10 and is
+      not guaranteed on Windows 11 either (it can be removed). Declaring it as
+      an external dependency lets App Installer chain-install the runtime.
+
+      The element, name and publisher must match Microsoft's allowlist exactly.
+      An earlier version used uap10:HostRuntimeDependency with
+      Name="Microsoft.Win32WebView2", which is not a valid dependency: the
+      package validated but failed to install through the Store (certification
+      failure 10.3.4).
+
+      Optional="true" so an offline install still succeeds; the app then shows
+      its own error if the runtime is missing.
+    -->
+    <win32dependencies:ExternalDependency
+      Name="Microsoft.WebView2"
+      Publisher="CN=Microsoft Windows, O=Microsoft Corporation, L=Redmond, S=Washington, C=US"
       MinVersion="92.0.902.78"
-      Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US" />
+      Optional="true" />
   </Dependencies>
 
   <Resources>
@@ -74,7 +92,22 @@
   </Resources>
 
   <Applications>
-    <Application Id="ZipScope" Executable="ZipScope.exe" EntryPoint="Windows.FullTrustApplication">
+    <!--
+      uap10:RuntimeBehavior and uap10:TrustLevel declare what kind of desktop
+      app this is. Without them the package relies on the legacy
+      EntryPoint="Windows.FullTrustApplication" shorthand, which the Store
+      accepts at upload but which leaves the runtime behaviour implicit.
+
+      packagedClassicApp + mediumIL is the correct pair for a Wails app: a
+      Win32 process running full trust as the signed-in user, not in an
+      AppContainer. This also matches the sibling ZipSweep package, which
+      passed certification with the same pair.
+    -->
+    <Application Id="ZipScope"
+                 Executable="ZipScope.exe"
+                 EntryPoint="Windows.FullTrustApplication"
+                 uap10:RuntimeBehavior="packagedClassicApp"
+                 uap10:TrustLevel="mediumIL">
       <uap:VisualElements
         DisplayName="ZipScope"
         Description="ZIP/CBZ を解凍せずに閲覧する画像ビューア"
@@ -144,9 +177,18 @@
   </Applications>
 
   <Capabilities>
-    <!-- The viewer reads archives from anywhere the user can reach, including
-         external drives, so it needs broad file system access. -->
+    <!--
+      A full-trust desktop package runs at medium integrity as the signed-in
+      user, so it already has the file access that user has. It needs
+      runFullTrust (required for packaged COM, which the Explorer integration
+      uses) and nothing else.
+
+      broadFileSystemAccess was declared here previously. It is an
+      AppContainer capability: it grants a sandboxed app access it would not
+      otherwise have. Declaring it on a full-trust package is wrong, and it is
+      a restricted capability that needs separate Store approval. It has been
+      removed.
+    -->
     <rescap:Capability Name="runFullTrust" />
-    <rescap:Capability Name="broadFileSystemAccess" />
   </Capabilities>
 </Package>

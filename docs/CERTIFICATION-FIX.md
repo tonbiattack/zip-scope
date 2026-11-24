@@ -180,28 +180,65 @@ Add-AppxPackage -Register AppxManifest.xml
 
 ### 完了させる手順（管理者権限で実行）
 
-```powershell
-# 1. 署名済みパッケージを生成
-pwsh scripts/make-msix.ps1 -Version 0.1.1.0 -Sign
+**1 コマンドで完結する検証スクリプトを用意しました。** どのディレクトリから実行しても動きます。
 
-# 2. 証明書を信頼
-Import-Certificate -FilePath build\msix\ZipScope-Test.cer `
+```powershell
+# 管理者権限の PowerShell で
+pwsh -File C:\apps\zip-scope\scripts\verify-msix-install.ps1
+```
+
+このスクリプトが次を順に実行し、各項目の PASS/FAIL を表示します。
+
+1. テスト証明書を `LocalMachine\TrustedPeople` に信頼
+2. `Add-AppxPackage` でインストール
+3. 起動してプロセスが立ち上がることを確認
+4. WACK を実行して全項目の合否を集計
+5. アンインストールして削除を確認
+
+オプション:
+
+| オプション | 動作 |
+| --- | --- |
+| `-SkipWack` | WACK を省略（数分かかるため） |
+| `-KeepInstalled` | インストールしたまま終了 |
+
+手動で行う場合:
+
+```powershell
+# すべて絶対パスで指定する（相対パスは呼び出し元の cwd 基準になるため）
+$repo = 'C:\apps\zip-scope'
+
+Import-Certificate -FilePath "$repo\build\msix\ZipScope-Test.cer" `
   -CertStoreLocation Cert:\LocalMachine\TrustedPeople
 
-# 3. インストール
-Add-AppxPackage -Path build\msix\ZipScope_0.1.1.0_x64.msix
+Add-AppxPackage -Path "$repo\build\msix\ZipScope_0.1.1.0_x64.msix"
 
-# 4. 起動して基本操作を確認
 Start-Process "shell:AppsFolder\tonbiattack.ZipScope_e28ksxe3fc9w4!ZipScope"
 
-# 5. WACK を実行
 & "C:\Program Files (x86)\Windows Kits\10\App Certification Kit\appcert.exe" `
-  reset /testpak build\msix\ZipScope_0.1.1.0_x64.msix
-& "C:\Program Files (x86)\Windows Kits\10\App Certification Kit\appcert.exe" `
-  test /appx build\msix\ZipScope_0.1.1.0_x64.msix /reportoutput build\msix\wack.xml
+  test /appx "$repo\build\msix\ZipScope_0.1.1.0_x64.msix" `
+  /reportoutput "$repo\build\msix\wack-report.xml"
 
-# 6. アンインストール
 Remove-AppxPackage -Package tonbiattack.ZipScope_0.1.1.0_x64__e28ksxe3fc9w4
 ```
 
 開発者モードが無効な場合は、設定 → システム → 開発者向け → 開発者モードを ON にします。
+
+### 相対パスで失敗した例（実際に起きたこと）
+
+`C:\Users\teni2` から相対パスで実行すると、すべてリポジトリ外を指します。
+
+```
+PS C:\Users\teni2> pwsh scripts/make-msix.ps1 -Version 0.1.1.0 -Sign
+引数 'scripts/make-msix.ps1' はスクリプト ファイルの名前として認識されません。
+
+PS C:\Users\teni2> Import-Certificate -FilePath build\msix\ZipScope-Test.cer ...
+Import-Certificate: 証明書ファイルが見つかりませんでした。
+
+PS C:\Users\teni2> Add-AppxPackage -Path build\msix\ZipScope_0.1.1.0_x64.msix
+Add-AppxPackage: パス 'C:\Users\teni2\build\msix\ZipScope_0.1.1.0_x64.msix' は存在しないため、見つかりません。
+```
+
+スクリプト側を修正しました。`make-msix.ps1` と `verify-pfn.ps1` は
+`$PSScriptRoot` からリポジトリを解決し、`verify-pfn.ps1` は引数を省略すると
+最新のパッケージを自動で選びます。出力メッセージも絶対パスで案内します。

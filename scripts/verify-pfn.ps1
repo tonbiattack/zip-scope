@@ -9,7 +9,8 @@
 
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)]
+    # Defaults to the newest package in build\msix, resolved from this script's
+    # location so the caller's working directory does not matter.
     [string]$MsixPath,
 
     [string]$ExpectedName = 'tonbiattack.ZipScope',
@@ -19,6 +20,22 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+$repoRoot = Split-Path -Parent $PSScriptRoot
+
+if (-not $MsixPath) {
+    $candidate = Get-ChildItem (Join-Path $repoRoot 'build\msix') -Filter '*.msix' -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    if (-not $candidate) {
+        throw "No .msix found under $repoRoot\build\msix. Build one with scripts\make-msix.ps1."
+    }
+    $MsixPath = $candidate.FullName
+}
+elseif (-not [System.IO.Path]::IsPathRooted($MsixPath)) {
+    # A relative path is resolved against the repository, not the caller's cwd.
+    $MsixPath = Join-Path $repoRoot $MsixPath
+}
 
 $MsixPath = [System.IO.Path]::GetFullPath($MsixPath)
 if (-not (Test-Path $MsixPath)) {

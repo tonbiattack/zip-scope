@@ -158,32 +158,64 @@ if ($Sign) {
     if (-not $CertPath) {
         # A self-signed certificate is enough to install locally for testing.
         # The Store re-signs the package, so this is not the shipping signature.
+        #
+        # The subject MUST equal the manifest's Publisher, which is the Partner
+        # Center GUID. Signing with any other subject fails with
+        # 0x8007000B (ERROR_BAD_FORMAT) and the real reason only appears in the
+        # event log: "The app manifest publisher name must match the subject
+        # name of the signing certificate".
         $CertPath = Join-Path $outDir 'ZipScope-Test.pfx'
-        if (-not (Test-Path $CertPath)) {
-            Write-Host "Creating a self-signed test certificate..."
-            $cert = New-SelfSignedCertificate `
-                -Type Custom `
-                -Subject 'CN=tonbiattack' `
+        $certSubject = $Publisher
+
+        $existing = Get-ChildItem Cert:\CurrentUser\My -ErrorAction SilentlyContinue |
+            Where-Object { $_.Subject -eq $certSubject -and $_.HasPrivateKey } |
+            Select-Object -First 1
+
+        if (-not $existing) {
+            Write-Host "Creating a self-signed test certificate for $certSubject..."
+            $existing = New-SelfSignedCertificate `
+                -Type CodeSigningCert `
+                -Subject $certSubject `
+                -KeyAlgorithm RSA `
+                -KeyLength 2048 `
                 -KeyUsage DigitalSignature `
+                -KeyExportPolicy Exportable `
                 -FriendlyName 'ZipScope MSIX Test' `
                 -CertStoreLocation 'Cert:\CurrentUser\My' `
-                -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.3', '2.5.29.19={text}')
-            $pwd = ConvertTo-SecureString -String 'zipscope' -Force -AsPlainText
-            Export-PfxCertificate -Cert $cert -FilePath $CertPath -Password $pwd | Out-Null
-            Export-Certificate -Cert $cert -FilePath (Join-Path $outDir 'ZipScope-Test.cer') | Out-Null
-            Write-Host "Wrote $CertPath (password: zipscope)"
-            Write-Host "Wrote $(Join-Path $outDir 'ZipScope-Test.cer') - install it to Trusted People to sideload"
+                -NotAfter (Get-Date).AddYears(2)
         }
+
+        $pwd = ConvertTo-SecureString -String 'zipscope' -Force -AsPlainText
+        Export-PfxCertificate -Cert $existing -FilePath $CertPath -Password $pwd | Out-Null
+        Export-Certificate -Cert $existing -FilePath (Join-Path $outDir 'ZipScope-Test.cer') | Out-Null
+        Write-Host "Certificate subject: $($existing.Subject)"
+        Write-Host "Wrote $CertPath (password: zipscope)"
+        Write-Host "Wrote $(Join-Path $outDir 'ZipScope-Test.cer')"
+
         if (-not $CertPassword) { $CertPassword = 'zipscope' }
     }
 
     Write-Host "Signing..."
     & $signtool sign /fd SHA256 /a /f $CertPath /p $CertPassword $msixPath
-    if ($LASTEXITCODE -ne 0) { throw "signtool sign failed" }
+    if ($LASTEXITCODE -ne 0) {
+        throw @"
+signtool sign failed.
+
+The most common cause is a certificate subject that does not match the
+manifest's Publisher. Both must be exactly:
+  $Publisher
+
+Check the event log for the specific reason:
+  Get-WinEvent -LogName Application -MaxEvents 5 |
+    Where-Object Message -like '*0x8007000B*'
+"@
+    }
 
     & $signtool verify /pa $msixPath
     if ($LASTEXITCODE -ne 0) {
-        Write-Warning "Signature verification failed. The test certificate is probably not trusted yet."
+        Write-Warning "Signature is present but the certificate is not trusted yet."
+        Write-Warning "Import it as Administrator, then install:"
+        Write-Warning "  Import-Certificate -FilePath `"$(Join-Path $outDir 'ZipScope-Test.cer')`" -CertStoreLocation Cert:\LocalMachine\TrustedPeople"
     }
 }
 

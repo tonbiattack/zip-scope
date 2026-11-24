@@ -242,3 +242,64 @@ Add-AppxPackage: パス 'C:\Users\teni2\build\msix\ZipScope_0.1.1.0_x64.msix' �
 スクリプト側を修正しました。`make-msix.ps1` と `verify-pfn.ps1` は
 `$PSScriptRoot` からリポジトリを解決し、`verify-pfn.ps1` は引数を省略すると
 最新のパッケージを自動で選びます。出力メッセージも絶対パスで案内します。
+
+## 署名で失敗した原因（0x8007000B）
+
+証明書を信頼した後、`Add-AppxPackage` が次のエラーになりました。
+
+```
+Add-AppxPackage: 0x800B0100: サブジェクトに署名がありませんでした。
+```
+
+パッケージが**署名されていなかった**ためです。`-Sign` なしで再ビルドしたためでした。
+
+署名を試みると、今度は `signtool` が失敗しました。
+
+```
+SignTool Error: An unexpected internal error has occurred.
+Error information: "Error: SignerSign() failed." (-2147024885/0x8007000b)
+```
+
+**`0x8007000B` は `ERROR_BAD_FORMAT` ですが、実際の原因は別です。**
+イベントログに本当の理由が出ます（[SignTool の既知の問題](https://learn.microsoft.com/en-us/windows/msix/package/signing-known-issues)）。
+
+| イベント ID | 意味 |
+| --- | --- |
+| 150 | マニフェストの Publisher と証明書の Subject が一致しない |
+| 151 | `/fd` のハッシュ方式がブロックマップと一致しない |
+| 152 | パッケージが壊れている |
+
+今回は **150** でした。
+
+```
+マニフェスト: Publisher="CN=2F14A66E-02DF-43E2-93E0-5C5900B38D2E"  ← Partner Center の GUID
+証明書:       Subject="CN=tonbiattack"                              ← 一致しない
+```
+
+**MSIX の署名証明書は、Subject がマニフェストの Publisher と完全一致している必要があります。**
+これは Store 提出用のパッケージにも当てはまります（Store が再署名する場合でも、
+アップロード時の検証で同じ照合が行われます）。
+
+### 修正
+
+`make-msix.ps1 -Sign` が、マニフェストの Publisher と同じ Subject の証明書を
+自動で作成するようにしました。
+
+```powershell
+# 証明書の Subject は $Publisher（= CN=2F14A66E-...）になる
+pwsh -File C:\apps\zip-scope\scripts\make-msix.ps1 -Version 0.1.1.0 -Sign
+```
+
+署名に失敗した場合は、イベントログの確認方法を含むエラーメッセージを出します。
+
+### 検証結果
+
+```
+Signing Certificate Chain:
+    Issued to: 2F14A66E-02DF-43E2-93E0-5C5900B38D2E
+    Expires:   Fri Nov 24 13:20:17 2028
+```
+
+署名は正しく入りました。`signtool verify` が残すエラーは
+「証明書チェーンが信頼されていない」のみで、これは
+`LocalMachine\TrustedPeople` へのインポート（管理者権限）で解消します。

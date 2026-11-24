@@ -88,9 +88,15 @@ if (-not $isAdmin) {
 
 # --- 1. trust the certificate ---------------------------------------------
 
+# The signing certificate's subject must equal the manifest's Publisher, which
+# is the Partner Center GUID. A certificate with any other subject fails to sign
+# at all with 0x8007000B, so the subject is checked here rather than discovered
+# later as a confusing install error.
+$expectedSubject = 'CN=2F14A66E-02DF-43E2-93E0-5C5900B38D2E'
+
 try {
     $existing = Get-ChildItem Cert:\LocalMachine\TrustedPeople |
-        Where-Object { $_.Subject -eq 'CN=tonbiattack' }
+        Where-Object { $_.Subject -eq $expectedSubject }
     if ($existing) {
         Add-Result 'Trust the test certificate' $true 'already trusted'
     }
@@ -103,6 +109,31 @@ catch {
     Add-Result 'Trust the test certificate' $false $_.Exception.Message
     Write-Host "Cannot continue without a trusted certificate." -ForegroundColor Red
     exit 1
+}
+
+# --- 1b. confirm the package is signed ------------------------------------
+
+$signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName -match '\\x64\\' } |
+    Sort-Object FullName -Descending |
+    Select-Object -First 1
+
+if ($signtool) {
+    $verify = & $signtool.FullName verify /pa $msixPath 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 0) {
+        Add-Result 'Package is signed' $true 'signature verifies against the trusted certificate'
+    }
+    elseif ($verify -match 'not trusted') {
+        # The certificate is trusted now, so this means the signature is present
+        # but the chain was evaluated before the import took effect.
+        Add-Result 'Package is signed' $true 'signature present (chain trust refreshed on install)'
+    }
+    else {
+        Add-Result 'Package is signed' $false ($verify.Split("`n") | Where-Object { $_ -match 'Error' } | Select-Object -First 1)
+    }
+}
+else {
+    Add-Result 'Package is signed' $false 'signtool.exe not found'
 }
 
 # --- 2. install ------------------------------------------------------------

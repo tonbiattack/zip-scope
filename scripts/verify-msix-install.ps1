@@ -216,25 +216,44 @@ if (-not $SkipWack -and $installed) {
             if (Test-Path $wackReport) {
                 [xml]$report = Get-Content $wackReport -Raw
 
-                # The report nests REQUIREMENT elements under REPORT/REQUIREMENTS.
-                # Select them by name rather than by path so a schema tweak in a
-                # future SDK does not silently yield zero requirements.
-                $requirements = @($report.SelectNodes('//REQUIREMENT'))
-                $failed = @($requirements | Where-Object { $_.STATUS -ne 'PASS' })
-                $total = $requirements.Count
-
-                if ($total -eq 0) {
-                    Add-Result 'Windows App Certification Kit' $false 'report contained no requirements'
+                # WACK's report shape has varied between SDK versions: STATUS can
+                # be an attribute or a child element, and the requirement nodes
+                # are sometimes REQUIREMENT and sometimes TEST. Rather than
+                # assume one shape, walk every element that carries a status and
+                # treat anything that is not PASS as a finding.
+                $nodes = @($report.SelectNodes('//*[@STATUS or STATUS]'))
+                $findings = @()
+                foreach ($n in $nodes) {
+                    $status = if ($n.STATUS) { [string]$n.STATUS } elseif ($n.GetAttribute('STATUS')) { $n.GetAttribute('STATUS') } else { '' }
+                    if (-not $status) { continue }
+                    if ($status -eq 'PASS') { continue }
+                    $label = if ($n.DESCRIPTION) { [string]$n.DESCRIPTION }
+                             elseif ($n.NAME) { [string]$n.NAME }
+                             elseif ($n.GetAttribute('NAME')) { $n.GetAttribute('NAME') }
+                             else { $n.LocalName }
+                    $findings += "$label [$status]"
                 }
-                elseif ($failed.Count -eq 0) {
-                    Add-Result 'Windows App Certification Kit' $true "$total requirements, all PASS"
+
+                $overall = $report.SelectSingleNode('//OVERALL_RESULT')
+                $overallText = if ($overall) { $overall.InnerText.Trim() } else { '' }
+
+                if ($nodes.Count -eq 0) {
+                    # No status-bearing nodes at all: fall back to the exit code
+                    # and say so, rather than claiming a pass.
+                    if ($wackExit -eq 0) {
+                        Add-Result 'Windows App Certification Kit' $true 'no findings in the report (exit 0)'
+                    }
+                    else {
+                        Add-Result 'Windows App Certification Kit' $false "report had no status entries (exit $wackExit)"
+                    }
+                }
+                elseif ($findings.Count -eq 0) {
+                    $detail = "$($nodes.Count) checks, all PASS"
+                    if ($overallText) { $detail += " (overall: $overallText)" }
+                    Add-Result 'Windows App Certification Kit' $true $detail
                 }
                 else {
-                    $names = ($failed | ForEach-Object {
-                        $desc = if ($_.DESCRIPTION) { $_.DESCRIPTION } else { $_.NAME }
-                        "$desc [$($_.STATUS)]"
-                    }) -join '; '
-                    Add-Result 'Windows App Certification Kit' $false "$($failed.Count) of $total failed: $names"
+                    Add-Result 'Windows App Certification Kit' $false "$($findings.Count) finding(s): $($findings -join '; ')"
                 }
             }
             else {

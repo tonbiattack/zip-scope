@@ -164,12 +164,23 @@ build/msix/ZipScope_0.1.1.0_x64.msix
 | 証明書の信頼 | **PASS**（`LocalMachine\TrustedPeople` にインポート） |
 | パッケージの署名 | **PASS**（信頼済み証明書で検証成功） |
 | インストール | **PASS**（`tonbiattack.ZipScope_0.1.1.0_x64__e28ksxe3fc9w4`） |
-| 起動 | **PASS**（pid 24160、31.5 MB） |
+| 起動 | **PASS**（pid 30136、35.9 MB） |
 | アンインストール | **PASS**（削除確認済み） |
-| WACK | スクリプトの引数誤りで未実行 → 修正済み |
+| WACK | 引数誤りで未実行 → 修正済み |
+
+**2 回実行して、いずれもインストール・起動・アンインストールが成功しました。**
+
+```
+[PASS] Trust the test certificate   already trusted
+[PASS] Package is signed            signature verifies against the trusted certificate
+[PASS] Install the package          installed tonbiattack.ZipScope_0.1.1.0_x64__e28ksxe3fc9w4
+[PASS] Launch the packaged app      pid 30136, 35.9 MB
+[PASS] Uninstall the package        removed
+
+Install, launch and uninstall all passed.
+```
 
 **認定項目 10.3.4 が問題にしていた「Store 経由でインストールできない」は解消しました。**
-インストール・起動・アンインストールがすべて成功しています。
 
 ### WACK の引数誤り
 
@@ -188,8 +199,9 @@ appcert test -appxpackagepath <path> -reportoutputpath <path>
 `reset` を先に実行して前回の状態を消す必要もあります。
 ZipSweep の `msix-acceptance.yml` と同じ呼び方に合わせました。
 
-あわせて、レポートの解析を `//REQUIREMENT` の XPath に変更しました
-（スキーマが変わっても 0 件にならないように）。
+あわせて、レポートの解析を堅牢にしました。WACK のレポート形式は SDK のバージョンで
+変わるため、`STATUS` を持つ要素をすべて走査し、`PASS` 以外を指摘として扱います
+（`STATUS` が属性でも子要素でも対応）。`OVERALL_RESULT` があれば併記します。
 
 ### 終了コードの扱い
 
@@ -202,11 +214,13 @@ WACK は診断情報として扱い、**インストール・起動・アンイ�
 WACK を実行して全項目 PASS を確認する必要があります。
 
 ```powershell
-# 管理者権限で
+# 管理者権限で（WACK を含む完全版）
 pwsh -File C:\apps\zip-scope\scripts\verify-msix-install.ps1
 ```
 
 WACK は数分かかります。結果は `build\msix\wack-report.xml` に出力されます。
+ZipSweep は同じ構成（フルトラスト + `runFullTrust` のみ）で 24 テスト全項目 PASS
+しているため、ZipScope も通る見込みです。
 
 ### 完了させる手順（管理者権限で実行）
 

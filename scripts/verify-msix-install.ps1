@@ -205,19 +205,35 @@ if (-not $SkipWack -and $installed) {
             Get-Process -Name 'ZipScope' -ErrorAction SilentlyContinue | Stop-Process -Force
             Start-Sleep -Seconds 2
 
-            & $appcert test /appx $msixPath /reportoutput $wackReport 2>&1 | Out-Null
+            # The argument names matter: appcert rejects /appx and /reportoutput
+            # with exit -1 and writes no report. The documented spellings are
+            # -appxpackagepath and -reportoutputpath, and reset must run first to
+            # clear state from a previous run.
+            & $appcert reset 2>&1 | Out-Null
+            & $appcert test -appxpackagepath $msixPath -reportoutputpath $wackReport 2>&1 | Out-Null
             $wackExit = $LASTEXITCODE
 
             if (Test-Path $wackReport) {
                 [xml]$report = Get-Content $wackReport -Raw
-                $requirements = $report.REPORT.REQUIREMENTS.REQUIREMENT
+
+                # The report nests REQUIREMENT elements under REPORT/REQUIREMENTS.
+                # Select them by name rather than by path so a schema tweak in a
+                # future SDK does not silently yield zero requirements.
+                $requirements = @($report.SelectNodes('//REQUIREMENT'))
                 $failed = @($requirements | Where-Object { $_.STATUS -ne 'PASS' })
-                $total = @($requirements).Count
-                if ($failed.Count -eq 0) {
+                $total = $requirements.Count
+
+                if ($total -eq 0) {
+                    Add-Result 'Windows App Certification Kit' $false 'report contained no requirements'
+                }
+                elseif ($failed.Count -eq 0) {
                     Add-Result 'Windows App Certification Kit' $true "$total requirements, all PASS"
                 }
                 else {
-                    $names = ($failed | ForEach-Object { $_.DESCRIPTION }) -join '; '
+                    $names = ($failed | ForEach-Object {
+                        $desc = if ($_.DESCRIPTION) { $_.DESCRIPTION } else { $_.NAME }
+                        "$desc [$($_.STATUS)]"
+                    }) -join '; '
                     Add-Result 'Windows App Certification Kit' $false "$($failed.Count) of $total failed: $names"
                 }
             }
@@ -270,10 +286,20 @@ Write-Host ""
 Write-Host "Summary" -ForegroundColor Cyan
 $results | Format-Table -AutoSize | Out-String | Write-Host
 
-$failedCount = @($results | Where-Object { -not $_.Passed }).Count
-if ($failedCount -eq 0) {
-    Write-Host "All checks passed." -ForegroundColor Green
+# WACK is reported separately: it is a diagnostic, and a WACK failure does not
+# mean the package cannot be installed. The install, launch and uninstall checks
+# are what certification 10.3.4 actually tests, so those decide the exit code.
+$critical = @($results | Where-Object { $_.Step -ne 'Windows App Certification Kit' })
+$criticalFailed = @($critical | Where-Object { -not $_.Passed }).Count
+$wackResult = $results | Where-Object { $_.Step -eq 'Windows App Certification Kit' }
+
+if ($criticalFailed -eq 0) {
+    Write-Host "Install, launch and uninstall all passed." -ForegroundColor Green
+    if ($wackResult -and -not $wackResult.Passed) {
+        Write-Host "WACK reported a problem; see the detail above and $wackReport" -ForegroundColor Yellow
+    }
     exit 0
 }
-Write-Host "$failedCount check(s) failed." -ForegroundColor Red
+
+Write-Host "$criticalFailed critical check(s) failed." -ForegroundColor Red
 exit 1

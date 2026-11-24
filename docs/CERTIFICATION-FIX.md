@@ -155,28 +155,58 @@ build/msix/ZipScope_0.1.1.0_x64.msix
 
 ## 検証状況
 
+### 実機検証の結果（2026-11-24）
+
+管理者権限で `scripts/verify-msix-install.ps1` を実行しました。
+
 | 項目 | 結果 |
 | --- | --- |
-| マニフェストのスキーマ検証 | PASS（`makeappx pack`） |
-| 依存解決エラーの解消 | 確認済み（`0x80073D31` が消えた） |
-| Identity / PFN の一致 | 確認済み |
-| パッケージ内容の照合 | 全ファイル存在 |
-| **インストール** | **未実施**（管理者権限が必要） |
-| **WACK** | **未実施**（管理者権限が必要） |
-| **アンインストール** | **未実施**（管理者権限が必要） |
+| 証明書の信頼 | **PASS**（`LocalMachine\TrustedPeople` にインポート） |
+| パッケージの署名 | **PASS**（信頼済み証明書で検証成功） |
+| インストール | **PASS**（`tonbiattack.ZipScope_0.1.1.0_x64__e28ksxe3fc9w4`） |
+| 起動 | **PASS**（pid 24160、31.5 MB） |
+| アンインストール | **PASS**（削除確認済み） |
+| WACK | スクリプトの引数誤りで未実行 → 修正済み |
 
-### 未実施の理由
+**認定項目 10.3.4 が問題にしていた「Store 経由でインストールできない」は解消しました。**
+インストール・起動・アンインストールがすべて成功しています。
 
-この環境には管理者権限がありません。以下がいずれも管理者権限を要求します。
+### WACK の引数誤り
 
-- 自己署名証明書の `LocalMachine\TrustedPeople` への登録
-- 開発者モードの有効化（`HKLM` への書き込み）
-- Windows App Certification Kit（`appcert.exe` が管理者権限を要求）
+最初の実行では WACK が `exit -1` でレポートを出力しませんでした。
+引数名が誤っていました。
 
 ```
-Add-AppxPackage -Register AppxManifest.xml
-→ 0x80073CFF: Windows 開発者用ライセンスまたはサイドローディング対応システムが必要です。
+# 誤り（exit -1、レポートなし）
+appcert test /appx <path> /reportoutput <path>
+
+# 正しい
+appcert reset
+appcert test -appxpackagepath <path> -reportoutputpath <path>
 ```
+
+`reset` を先に実行して前回の状態を消す必要もあります。
+ZipSweep の `msix-acceptance.yml` と同じ呼び方に合わせました。
+
+あわせて、レポートの解析を `//REQUIREMENT` の XPath に変更しました
+（スキーマが変わっても 0 件にならないように）。
+
+### 終了コードの扱い
+
+WACK は診断情報として扱い、**インストール・起動・アンインストール**の
+3 項目で終了コードを決めるようにしました。WACK の失敗は
+「パッケージがインストールできない」ことを意味しないためです。
+
+### 残作業
+
+WACK を実行して全項目 PASS を確認する必要があります。
+
+```powershell
+# 管理者権限で
+pwsh -File C:\apps\zip-scope\scripts\verify-msix-install.ps1
+```
+
+WACK は数分かかります。結果は `build\msix\wack-report.xml` に出力されます。
 
 ### 完了させる手順（管理者権限で実行）
 

@@ -216,44 +216,48 @@ if (-not $SkipWack -and $installed) {
             if (Test-Path $wackReport) {
                 [xml]$report = Get-Content $wackReport -Raw
 
-                # WACK's report shape has varied between SDK versions: STATUS can
-                # be an attribute or a child element, and the requirement nodes
-                # are sometimes REQUIREMENT and sometimes TEST. Rather than
-                # assume one shape, walk every element that carries a status and
-                # treat anything that is not PASS as a finding.
-                $nodes = @($report.SelectNodes('//*[@STATUS or STATUS]'))
+                # WACK's report shape: REPORT/REQUIREMENTS/REQUIREMENT/TEST,
+                # where each TEST carries its verdict in a RESULT child element
+                # (CDATA) and its findings in MESSAGE elements with a TEXT
+                # attribute. STATUS is not used at all, so an earlier parser
+                # that looked for it found nothing and reported a false pass.
+                $tests = @($report.SelectNodes('//TEST'))
                 $findings = @()
-                foreach ($n in $nodes) {
-                    $status = if ($n.STATUS) { [string]$n.STATUS } elseif ($n.GetAttribute('STATUS')) { $n.GetAttribute('STATUS') } else { '' }
-                    if (-not $status) { continue }
-                    if ($status -eq 'PASS') { continue }
-                    $label = if ($n.DESCRIPTION) { [string]$n.DESCRIPTION }
-                             elseif ($n.NAME) { [string]$n.NAME }
-                             elseif ($n.GetAttribute('NAME')) { $n.GetAttribute('NAME') }
-                             else { $n.LocalName }
-                    $findings += "$label [$status]"
-                }
+                $optionalFindings = @()
 
-                $overall = $report.SelectSingleNode('//OVERALL_RESULT')
-                $overallText = if ($overall) { $overall.InnerText.Trim() } else { '' }
+                foreach ($t in $tests) {
+                    $verdict = if ($t.RESULT) { $t.RESULT.InnerText.Trim() } else { '' }
+                    if (-not $verdict -or $verdict -eq 'PASS') { continue }
 
-                if ($nodes.Count -eq 0) {
-                    # No status-bearing nodes at all: fall back to the exit code
-                    # and say so, rather than claiming a pass.
-                    if ($wackExit -eq 0) {
-                        Add-Result 'Windows App Certification Kit' $true 'no findings in the report (exit 0)'
+                    $messages = @($t.SelectNodes('MESSAGES/MESSAGE') | ForEach-Object { $_.GetAttribute('TEXT') })
+                    $detail = if ($messages.Count -gt 0) { $messages[0] } else { $t.DESCRIPTION }
+                    $entry = "$($t.NAME) [$verdict]: $detail"
+
+                    # OPTIONAL="TRUE" marks a check Microsoft does not require
+                    # for certification. Report it, but do not fail on it.
+                    if ($t.GetAttribute('OPTIONAL') -eq 'TRUE') {
+                        $optionalFindings += $entry
                     }
                     else {
-                        Add-Result 'Windows App Certification Kit' $false "report had no status entries (exit $wackExit)"
+                        $findings += $entry
                     }
                 }
+
+                if ($tests.Count -eq 0) {
+                    Add-Result 'Windows App Certification Kit' $false 'report contained no tests'
+                }
                 elseif ($findings.Count -eq 0) {
-                    $detail = "$($nodes.Count) checks, all PASS"
-                    if ($overallText) { $detail += " (overall: $overallText)" }
+                    $detail = "$($tests.Count) tests, all required checks PASS"
+                    if ($optionalFindings.Count -gt 0) {
+                        $detail += "; $($optionalFindings.Count) optional finding(s)"
+                    }
                     Add-Result 'Windows App Certification Kit' $true $detail
+                    foreach ($o in $optionalFindings) {
+                        Write-Host "       optional: $o" -ForegroundColor DarkYellow
+                    }
                 }
                 else {
-                    Add-Result 'Windows App Certification Kit' $false "$($findings.Count) finding(s): $($findings -join '; ')"
+                    Add-Result 'Windows App Certification Kit' $false "$($findings.Count) required check(s) failed: $($findings -join '; ')"
                 }
             }
             else {

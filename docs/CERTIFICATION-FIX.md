@@ -157,30 +157,70 @@ build/msix/ZipScope_0.1.1.0_x64.msix
 
 ### 実機検証の結果（2026-11-24）
 
-管理者権限で `scripts/verify-msix-install.ps1` を実行しました。
+管理者権限で `scripts/verify-msix-install.ps1` を実行し、**全項目 PASS** しました。
 
 | 項目 | 結果 |
 | --- | --- |
-| 証明書の信頼 | **PASS**（`LocalMachine\TrustedPeople` にインポート） |
+| 証明書の信頼 | **PASS** |
 | パッケージの署名 | **PASS**（信頼済み証明書で検証成功） |
 | インストール | **PASS**（`tonbiattack.ZipScope_0.1.1.0_x64__e28ksxe3fc9w4`） |
-| 起動 | **PASS**（pid 30136、35.9 MB） |
-| アンインストール | **PASS**（削除確認済み） |
-| WACK | 引数誤りで未実行 → 修正済み |
-
-**2 回実行して、いずれもインストール・起動・アンインストールが成功しました。**
+| 起動 | **PASS**（pid 35420、36.4 MB） |
+| WACK | **PASS**（24 テスト、必須チェック全 PASS） |
+| アンインストール | **PASS** |
 
 ```
 [PASS] Trust the test certificate   already trusted
 [PASS] Package is signed            signature verifies against the trusted certificate
 [PASS] Install the package          installed tonbiattack.ZipScope_0.1.1.0_x64__e28ksxe3fc9w4
-[PASS] Launch the packaged app      pid 30136, 35.9 MB
+[PASS] Launch the packaged app      pid 35420, 36.4 MB
+[PASS] Windows App Certification Kit  24 tests, all required checks PASS; 1 optional finding(s)
 [PASS] Uninstall the package        removed
 
 Install, launch and uninstall all passed.
 ```
 
 **認定項目 10.3.4 が問題にしていた「Store 経由でインストールできない」は解消しました。**
+
+### WACK の結果詳細
+
+24 テスト中 **23 PASS、必須チェックの失敗 0 件**です。
+
+`OPTIONAL="TRUE"` の 1 件（ブロック済みの実行可能ファイル）が FAIL ですが、
+**Microsoft はこれを認定要件にしていません**。指摘内容は次のとおりで、いずれも無害です。
+
+| 指摘 | 評価 |
+| --- | --- |
+| `ZipScopeShell.dll` が `CreateProcessW` を参照 | **意図した動作**。右クリックメニューからビューアを起動するために必要 |
+| `README.md` に `cmd` の文字列 | ドキュメント内の説明文 |
+| `ZipScope.exe` に `REG` / `bash` / `CSI` / `powershell` / `Cmd` | Wails / WebView2 ランタイムに含まれる文字列。ZipScope 自身のコードではない |
+
+このテストは「プロセス起動 API とブロックされた実行可能ファイルへの参照」を
+文字列検索で検出するもので、誤検知が多く `OPTIONAL` に分類されています。
+
+### WACK レポートの形式（判明したこと）
+
+実際のレポートは次の構造でした。**`STATUS` 要素は存在しません。**
+
+```xml
+<REPORT>
+  <REQUIREMENTS>
+    <REQUIREMENT NUMBER="3" TITLE="...">
+      <TEST INDEX="2" NAME="..." DESCRIPTION="..." OPTIONAL="TRUE">
+        <MESSAGES>
+          <MESSAGE TEXT="指摘内容" />
+        </MESSAGES>
+        <RESULT><![CDATA[PASS]]></RESULT>
+      </TEST>
+    </REQUIREMENT>
+  </REQUIREMENTS>
+</REPORT>
+```
+
+判定は `TEST/RESULT` の CDATA、指摘は `MESSAGE` の `TEXT` 属性です。
+`OPTIONAL` 属性が `TRUE` のテストは認定要件外です。
+
+最初のパーサーは `STATUS` を探していたため 0 件と判定し、
+**FAIL があるのに PASS と表示する誤り**がありました。修正済みです。
 
 ### WACK の引数誤り
 
@@ -199,28 +239,11 @@ appcert test -appxpackagepath <path> -reportoutputpath <path>
 `reset` を先に実行して前回の状態を消す必要もあります。
 ZipSweep の `msix-acceptance.yml` と同じ呼び方に合わせました。
 
-あわせて、レポートの解析を堅牢にしました。WACK のレポート形式は SDK のバージョンで
-変わるため、`STATUS` を持つ要素をすべて走査し、`PASS` 以外を指摘として扱います
-（`STATUS` が属性でも子要素でも対応）。`OVERALL_RESULT` があれば併記します。
-
 ### 終了コードの扱い
 
 WACK は診断情報として扱い、**インストール・起動・アンインストール**の
 3 項目で終了コードを決めるようにしました。WACK の失敗は
 「パッケージがインストールできない」ことを意味しないためです。
-
-### 残作業
-
-WACK を実行して全項目 PASS を確認する必要があります。
-
-```powershell
-# 管理者権限で（WACK を含む完全版）
-pwsh -File C:\apps\zip-scope\scripts\verify-msix-install.ps1
-```
-
-WACK は数分かかります。結果は `build\msix\wack-report.xml` に出力されます。
-ZipSweep は同じ構成（フルトラスト + `runFullTrust` のみ）で 24 テスト全項目 PASS
-しているため、ZipScope も通る見込みです。
 
 ### 完了させる手順（管理者権限で実行）
 

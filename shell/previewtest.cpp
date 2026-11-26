@@ -164,16 +164,28 @@ void TestPreview(const wchar_t* path, int width, int height, const wchar_t* shot
     printf("  DoPreview: 0x%08lX\n", hr);
     Check(SUCCEEDED(hr), "DoPreview succeeded");
 
-    // Let the window paint.
+    // Let the window paint. The first paint does the decoding, so a few
+    // hundred milliseconds is normal for a large archive; the extra passes let
+    // the result settle before the screenshot.
     MSG msg = {};
-    for (int i = 0; i < 30; i++) {
+    for (int i = 0; i < 60; i++) {
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
         Sleep(20);
     }
+    // Force a full repaint of the host and its child before capturing.
+    RedrawWindow(host, nullptr, nullptr,
+                 RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
     UpdateWindow(host);
+    for (int i = 0; i < 10; i++) {
+        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+        Sleep(20);
+    }
 
     if (shot) {
         bool saved = SaveWindowPng(host, shot);

@@ -1,4 +1,4 @@
-﻿// PreviewSetting mirrors the Go type: the state of ZipScope's preview handler
+// PreviewSetting mirrors the Go type: the state of ZipScope's preview handler
 // for one extension.
 export interface PreviewSetting {
   ext: string

@@ -1,4 +1,4 @@
-﻿// Thin wrapper over the Wails bindings. Every call goes through here so the
+// Thin wrapper over the Wails bindings. Every call goes through here so the
 // rest of the UI never touches window.go directly, and so tests can substitute
 // a fake API.
 

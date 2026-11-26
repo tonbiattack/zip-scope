@@ -130,11 +130,12 @@ ZIP を選んでコマンドバーのボタン、または右クリックメニ�
 | --- | --- |
 | サムネイル | ZIP / CBZ のアイコンが、中の最初の画像（自然順先頭）になる |
 | 右クリック | 「ZipScopeで開く」でその ZIP を ZipScope で開く |
-| プレビュー | `Alt+P` のプレビューペインに、中の画像を一覧表示する |
+| プレビュー | `Alt+P` のペインに画像一覧を表示する（**実装中。Explorer 経由の表示は未解決**） |
 
 プレビューペインは **ZIP を全展開せず、表示に必要な画像だけを遅延読み込み** します。
 150 枚のアーカイブでも初期表示は約 23 ms、メモリ増分は 2〜3 MB です。
-詳細は [docs/PREVIEW-PANE.md](docs/PREVIEW-PANE.md) を参照してください。
+ただし Explorer のペインへの表示に未解決の問題があり、詳細と次に試すことは
+[docs/PREVIEW-PANE.md](docs/PREVIEW-PANE.md) にまとめています。
 
 ![Preview pane](docs/store/preview-01.png)
 

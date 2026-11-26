@@ -162,13 +162,55 @@ previewtest.exe <archive.cbz> <screenshot.png> [narrow.cbz] [reject.zip]
 | 150 枚のアーカイブ | PASS（`docs/store/preview-many.png`） |
 | 破損 ZIP | PASS（エラー表示、クラッシュなし） |
 | 画像なし ZIP | PASS（エラー表示） |
+| 登録内容 | PASS（HKCU の ShellEx / CLSID / AppID を確認） |
+| DLL の読み込み | PASS（`tasklist /m ZipScopeShell.dll` で explorer.exe / dllhost.exe に現れる） |
 | サムネイル・右クリック機能 | PASS（既存テストが継続して成功） |
 
-### 未検証
+### 未解決: Explorer のペインに表示されない
 
-Explorer 本体のプレビューペインでの表示は、この環境では確認できていません
-（`Alt+P` の操作と Explorer の再起動が必要）。ハンドラ単体の動作、
-登録内容、既存機能との共存は上記のとおり確認済みです。
+**現時点で、Explorer のプレビューペインには本ハンドラの一覧が表示されません。**
+ハンドラ単体は正しく動く（上表）のに、Explorer 経由では表示されない、という状態です。
+
+確認できたこと:
+
+| 確認 | 結果 |
+| --- | --- |
+| `.zip` を選択したときのペイン | Windows 内蔵の ZIP プレビューが表示される（本ハンドラではない） |
+| `.cbz` を選択したときのペイン | 単一画像が表示される（本ハンドラのグリッドではない） |
+| `ZipScopeShell.dll` の読み込み | `explorer.exe` に読み込まれている（サムネイル経由の可能性あり） |
+| `IInitializeWithStream` 経由の生成 | 成功（`previewtest.exe`） |
+| `AppID` / `DllSurrogate` の有無 | どちらでも表示は変わらず |
+
+推測（未確認）:
+
+- Windows 11 は `.zip` に対して内蔵の CompressedFolder プレビューを持ち、
+  こちらが優先される可能性が高い
+- `.cbz` は関連付け（ProgID）を持たないため、`HKCR\.cbz\ShellEx` ではなく
+  `SystemFileAssociations` 側を見ている可能性がある
+- ペインのハンドラ選択ドロップダウンに本ハンドラが出ていないことから、
+  列挙の段階で除外されている可能性がある
+
+### 次に試すこと
+
+1. `HKCU\Software\Classes\SystemFileAssociations\.cbz\ShellEx\{8895b1c6-...}` にも登録する
+2. `.cbz` に専用の ProgID を作り、その `ShellEx` に登録する
+3. プレビューペインのハンドラ選択ドロップダウンに表示されるか確認する
+   （表示されれば、選択で動作を確認できる）
+4. `Process Monitor` で Explorer がどの CLSID を問い合わせているか観察する
+5. 必要なら `IInitializeWithFile` も実装する（Explorer がファイルパスで
+   初期化しようとする経路に対応するため）
+
+### 設計上の注意（`.zip` の内蔵プレビューとの関係）
+
+Windows 11 は `.zip` に対して標準のプレビューを持っています。
+ZipScope のハンドラを既定にすると、**ユーザーが Windows 標準の動作を失う**可能性があります。
+Issue の要件にある「既存登録の無断上書きは避け、必要に応じてオプトイン方式を採用」に沿うなら、
+次のいずれかが妥当です。
+
+- 既定は Windows 標準のままにし、ペインのドロップダウンから ZipScope を選べるようにする
+- 設定で「ZipScope のプレビューを優先する」を選んだ場合だけ上書きする
+
+この判断は未決です。実装を進める前に方針を決める必要があります。
 
 ## 実装中に見つけた不具合
 

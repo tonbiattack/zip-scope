@@ -1,7 +1,9 @@
 <script setup lang="ts">
 // Settings panel: cache budget, worker count, cache clearing and diagnostics.
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import type { CacheStats, PrefetchStats, Settings } from '../lib/types'
+import type { PreviewSetting } from '../lib/backend'
+import { backend } from '../lib/backend'
 import { formatBytes } from '../lib/format'
 
 const props = defineProps<{
@@ -19,6 +21,35 @@ const emit = defineEmits<{
 }>()
 
 const busy = ref(false)
+
+// The preview integration lives in the registry, not in settings.json, so it is
+// read separately and refreshed after every change.
+const previewSettings = ref<PreviewSetting[]>([])
+const previewError = ref('')
+
+async function refreshPreview() {
+  try {
+    previewSettings.value = await backend.getPreviewSettings()
+    previewError.value = ''
+  } catch (e) {
+    previewError.value = String(e)
+  }
+}
+
+async function togglePreview(ext: string, enabled: boolean) {
+  busy.value = true
+  try {
+    previewSettings.value = await backend.setPreviewEnabled(ext, enabled)
+    previewError.value = ''
+  } catch (e) {
+    previewError.value = String(e)
+    await refreshPreview()
+  } finally {
+    busy.value = false
+  }
+}
+
+onMounted(refreshPreview)
 
 const cacheGB = computed(() => (props.settings.cacheLimitBytes / (1 << 30)).toFixed(1))
 const memMB = computed(() => Math.round(props.settings.memoryLimitBytes / (1 << 20)))
@@ -137,6 +168,26 @@ async function run(fn: () => void) {
       </section>
 
       <section>
+        <h3>エクスプローラーのプレビュー</h3>
+        <p class="hint">
+          ZIP / CBZ を選んで <kbd>Alt+P</kbd> を押したとき、中の画像一覧を
+          プレビューペインに表示します。オフにすると元の状態に戻します。
+        </p>
+        <label v-for="p in previewSettings" :key="p.ext" class="row toggle">
+          <input
+            type="checkbox"
+            :checked="p.enabled"
+            :disabled="busy"
+            @change="togglePreview(p.ext, ($event.target as HTMLInputElement).checked)"
+          />
+          <span>{{ p.ext === '.zip' ? 'ZIP' : 'CBZ' }} のプレビュー</span>
+          <span v-if="!p.isZipScope && p.currentHandler" class="note">
+            他のアプリが登録中
+          </span>
+        </label>
+      </section>
+
+      <section>
         <h3>制限</h3>
         <div class="stats">
           <div><span>1画像の展開上限</span><b>{{ formatBytes(settings.maxEntryBytes) }}</b></div>
@@ -192,6 +243,34 @@ h3 {
   gap: 12px;
   padding: 4px 0;
   font-size: 12px;
+}
+/* The preview toggles read left-to-right as a checkbox and a label, so they do
+   not use the row layout's space-between. */
+.row.toggle {
+  justify-content: flex-start;
+  gap: 8px;
+  cursor: pointer;
+}
+.row.toggle input {
+  accent-color: #5a8cff;
+}
+.note {
+  color: #c9a227;
+  font-size: 11px;
+}
+.hint {
+  margin: 0 0 8px;
+  color: #8a8a96;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.hint kbd {
+  padding: 1px 4px;
+  border: 1px solid #3a3a44;
+  border-radius: 3px;
+  background: #26262e;
+  font-family: inherit;
+  font-size: 10px;
 }
 .control {
   display: flex;

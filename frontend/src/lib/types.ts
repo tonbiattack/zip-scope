@@ -1,3 +1,12 @@
+﻿// PreviewSetting mirrors the Go type: the state of ZipScope's preview handler
+// for one extension.
+export interface PreviewSetting {
+  ext: string
+  enabled: boolean
+  currentHandler: string
+  isZipScope: boolean
+}
+
 // Types mirroring the Go structs bound to the frontend. Keeping them in one
 // place makes a backend field rename a compile error rather than a silent
 // undefined.
@@ -128,6 +137,8 @@ export interface OrganizeCapabilities {
 export interface ZipScopeAPI {
   GetSettings(): Promise<Settings>
   UpdateSettings(patch: SettingsPatch): Promise<Settings>
+  GetPreviewSettings(): Promise<PreviewSetting[]>
+  SetPreviewEnabled(ext: string, enabled: boolean): Promise<PreviewSetting[]>
   GetCacheStats(): Promise<CacheStats>
   ClearCache(): Promise<void>
   ClearThumbnails(): Promise<void>

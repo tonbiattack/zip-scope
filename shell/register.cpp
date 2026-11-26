@@ -6,6 +6,7 @@
 // same user who runs the viewer. A machine-wide install would use
 // HKEY_LOCAL_MACHINE instead; the code is otherwise identical.
 #include <windows.h>
+#include <cwchar>
 #include <shlwapi.h>
 #include <shlobj.h>
 
@@ -76,44 +77,104 @@ bool RegisterContextMenu() {
     return true;
 }
 
-// RegisterPreviewHandler wires the preview handler for .zip and .cbz.
-//
-// Preview handlers are registered under the extension's Shellex key, next to the
-// thumbnail provider. Two values matter to Windows:
-//
-//   (default)  the CLSID of the handler
-//   DisplayName  what the preview pane's dropdown shows
-//
-// And the handler's CLSID needs a "AppID" value pointing at an AppId key with
-// DllSurrogate set, because Explorer activates preview handlers in a surrogate
-// host rather than loading them into explorer.exe. Without DllSurrogate the
-// handler is listed but never runs.
-bool RegisterPreviewHandler() {
-    const wchar_t* exts[] = {L".zip", L".cbz"};
-    std::wstring clsid = ClsidToString(CLSID_ZipScopePreviewHandler);
-    std::wstring appId = ClsidToString(APPID_ZipScopePreviewHandler);
+// RegisterComClass writes the CLSID entry that points at this DLL. Declared here
+// because RegisterPreviewComClass below builds on it.
+bool RegisterComClass(REFCLSID clsid, const wchar_t* name, const std::wstring& dllPath);
 
-    for (const wchar_t* ext : exts) {
-        std::wstring base = std::wstring(L"Software\\Classes\\") + ext +
-                            L"\\ShellEx\\{8895b1c6-b41f-4c1c-a562-0d564250836f}";
-        if (!SetKey(HKEY_CURRENT_USER, base, nullptr, clsid)) return false;
-        if (!SetKey(HKEY_CURRENT_USER, base, L"DisplayName", L"ZipScope")) return false;
+// ReadString returns a registry string value, or an empty string when the key or
+// value does not exist. An absent value and an empty value are different things
+// to this file, so callers that care check the key themselves.
+std::wstring ReadString(HKEY root, const std::wstring& path, const wchar_t* name) {
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(root, path.c_str(), 0, KEY_QUERY_VALUE, &key) != ERROR_SUCCESS) {
+        return std::wstring();
     }
+    wchar_t buf[512] = {};
+    DWORD type = 0;
+    DWORD size = sizeof(buf) - sizeof(wchar_t);
+    LONG rc = RegQueryValueExW(key, name, nullptr, &type, reinterpret_cast<LPBYTE>(buf), &size);
+    RegCloseKey(key);
+    if (rc != ERROR_SUCCESS) return std::wstring();
+    buf[size / sizeof(wchar_t)] = L'\0';
+    return std::wstring(buf);
+}
+// kPreviewSurrogateAppId is the "Preview Handler Surrogate Host" AppID that
+// Windows itself registers in HKLM, with DllSurrogate = prevhost.exe.
+//
+// A preview handler must reference it: Explorer activates preview handlers in
+// prevhost.exe rather than loading them into explorer.exe, and without the AppID
+// activation fails silently, which shows up as an empty pane.
+constexpr const wchar_t* kPreviewSurrogateAppId =
+    L"{6D2B5079-2F0B-48DD-AB7F-97CEC514D30B}";
 
-    // The AppID describes the surrogate Explorer launches for this handler.
-    std::wstring appBase = L"Software\\Classes\\AppID\\" + appId;
-    if (!SetKey(HKEY_CURRENT_USER, appBase, nullptr, L"ZipScope Preview Handler")) return false;
-    // An empty DllSurrogate means "use the system surrogate host", which is what
-    // a preview handler needs.
-    if (!SetKey(HKEY_CURRENT_USER, appBase, L"DllSurrogate", L"")) return false;
+// kPreviewHandlerList is where Windows keeps the list of preview handlers it is
+// willing to use. A handler registered only under the extension is ignored; this
+// list is what makes it appear.
+constexpr const wchar_t* kPreviewHandlerList =
+    L"Software\\Microsoft\\Windows\\CurrentVersion\\PreviewHandlers";
 
-    // The CLSID entry must reference the AppID.
-    std::wstring clsidBase = L"Software\\Classes\\CLSID\\" + clsid;
-    if (!SetKey(HKEY_CURRENT_USER, clsidBase, L"AppID", appId)) return false;
+// kPreviewShellEx is the well-known ShellEx handler ID for preview handlers.
+constexpr const wchar_t* kPreviewShellEx = L"{8895B1C6-B41F-4C1C-A562-0D564250836F}";
 
-    return true;
+// kPreviewBackupRoot is where the app records the handler it replaced, so
+// disabling can put it back. The Go side (internal/shellreg) uses the same path.
+constexpr const wchar_t* kPreviewBackupRoot = L"Software\\ZipScope\\preview-backup";
+
+// RegisterPreviewComClass writes the CLSID entry for the preview handler and
+// points it at the system preview surrogate.
+//
+// The handler is NOT enabled here. Enabling is opt-in per extension and is done
+// from the app's settings page, which writes the extension's ShellEx slot and the
+// handler list. Registering the class up front just makes the later switch
+// instantaneous.
+bool RegisterPreviewComClass(const std::wstring& dllPath) {
+    if (!RegisterComClass(CLSID_ZipScopePreviewHandler, L"ZipScope Preview Handler", dllPath)) {
+        return false;
+    }
+    std::wstring base =
+        L"Software\\Classes\\CLSID\\" + ClsidToString(CLSID_ZipScopePreviewHandler);
+    return SetKey(HKEY_CURRENT_USER, base, L"AppID", kPreviewSurrogateAppId);
 }
 
+// RestorePreviewHandler puts back whatever handler an extension had before
+// ZipScope took the slot, and removes the handler-list entry if no extension is
+// using ZipScope any more.
+void RestorePreviewHandler() {
+    const wchar_t* exts[] = {L".zip", L".cbz"};
+    for (const wchar_t* ext : exts) {
+        std::wstring backupPath = std::wstring(kPreviewBackupRoot) + L"\\" + ext;
+        std::wstring backup = ReadString(HKEY_CURRENT_USER, backupPath, nullptr);
+
+        std::wstring slot = std::wstring(L"Software\\Classes\\") + ext + L"\\ShellEx\\" +
+                            kPreviewShellEx;
+
+        if (backup == L"<absent>") {
+            // There was no handler before: remove the slot we created.
+            DeleteTree(HKEY_CURRENT_USER, slot);
+        }
+        else if (!backup.empty()) {
+            SetKey(HKEY_CURRENT_USER, slot, nullptr, backup);
+        }
+        else {
+            // No backup recorded. Only remove the slot if it is still ours, so a
+            // handler belonging to another application is never deleted.
+            std::wstring current = ReadString(HKEY_CURRENT_USER, slot, nullptr);
+            if (_wcsicmp(current.c_str(), ClsidToString(CLSID_ZipScopePreviewHandler).c_str()) == 0) {
+                DeleteTree(HKEY_CURRENT_USER, slot);
+            }
+        }
+        DeleteTree(HKEY_CURRENT_USER, backupPath);
+    }
+
+    // Drop the preview handler list entry; ZipScope no longer handles previews.
+    std::wstring listClsid = ClsidToString(CLSID_ZipScopePreviewHandler);
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, kPreviewHandlerList, 0, KEY_SET_VALUE, &key) ==
+        ERROR_SUCCESS) {
+        RegDeleteValueW(key, listClsid.c_str());
+        RegCloseKey(key);
+    }
+}
 // RegisterComClass writes the CLSID entry that points at this DLL.
 bool RegisterComClass(REFCLSID clsid, const wchar_t* name, const std::wstring& dllPath) {
     std::wstring clsidStr = ClsidToString(clsid);
@@ -142,13 +203,9 @@ STDAPI DllRegisterServer() {
                                         L"ZipScope Context Menu", dll)) {
             return E_FAIL;
         }
-        if (!zipscope::RegisterComClass(CLSID_ZipScopePreviewHandler,
-                                        L"ZipScope Preview Handler", dll)) {
-            return E_FAIL;
-        }
+        if (!zipscope::RegisterPreviewComClass(dll)) return E_FAIL;
         if (!zipscope::RegisterThumbnailHandler()) return E_FAIL;
         if (!zipscope::RegisterContextMenu()) return E_FAIL;
-        if (!zipscope::RegisterPreviewHandler()) return E_FAIL;
 
         // Tell Explorer that the thumbnail cache is stale.
         SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
@@ -166,9 +223,8 @@ STDAPI DllUnregisterServer() {
         zipscope::DeleteTree(HKEY_CURRENT_USER,
                              L"Software\\Classes\\CLSID\\" +
                                  zipscope::ClsidToString(CLSID_ZipScopeContextMenu));
-        zipscope::DeleteTree(HKEY_CURRENT_USER,
-                             L"Software\\Classes\\CLSID\\" +
-                                 zipscope::ClsidToString(CLSID_ZipScopePreviewHandler));
+                zipscope::RestorePreviewHandler();
+
         zipscope::DeleteTree(HKEY_CURRENT_USER,
                              L"Software\\Classes\\AppID\\" +
                                  zipscope::ClsidToString(APPID_ZipScopePreviewHandler));

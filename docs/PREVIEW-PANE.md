@@ -1,4 +1,4 @@
-# エクスプローラーのプレビューペイン対応
+﻿# エクスプローラーのプレビューペイン対応
 
 ZIP / CBZ を選択するだけで、エクスプローラーのプレビューペイン（`Alt+P`）に
 中の画像が一覧表示されます。ZipScope 本体は起動しません。
@@ -166,65 +166,161 @@ previewtest.exe <archive.cbz> <screenshot.png> [narrow.cbz] [reject.zip]
 | DLL の読み込み | PASS（`tasklist /m ZipScopeShell.dll` で explorer.exe / dllhost.exe に現れる） |
 | サムネイル・右クリック機能 | PASS（既存テストが継続して成功） |
 
-### 未解決: Explorer のペインに表示されない
+### 解決済み: Explorer のペインに表示されなかった原因
 
-**現時点で、Explorer のプレビューペインには本ハンドラの一覧が表示されません。**
-ハンドラ単体は正しく動く（上表）のに、Explorer 経由では表示されない、という状態です。
+最初の実装では Explorer からハンドラが呼ばれませんでした。原因は**登録先の不足**で、
+2 点足りていませんでした。
 
-確認できたこと:
+#### 1. `PreviewHandlers` 一覧への登録（これが本質）
 
-| 確認 | 結果 |
-| --- | --- |
-| `.zip` を選択したときのペイン | Windows 内蔵の ZIP プレビューが表示される（本ハンドラではない） |
-| `.cbz` を選択したときのペイン | 単一画像が表示される（本ハンドラのグリッドではない） |
-| `ZipScopeShell.dll` の読み込み | `explorer.exe` に読み込まれている（サムネイル経由の可能性あり） |
-| `IInitializeWithStream` 経由の生成 | 成功（`previewtest.exe`） |
-| `AppID` / `DllSurrogate` の有無 | どちらでも表示は変わらず |
+Windows は、`HKCU\Software\Microsoft\Windows\CurrentVersion\PreviewHandlers` に
+載っているハンドラしか使いません。拡張子の `ShellEx` と CLSID だけでは**無視されます**。
 
-推測（未確認）:
-
-- Windows 11 は `.zip` に対して内蔵の CompressedFolder プレビューを持ち、
-  こちらが優先される可能性が高い
-- `.cbz` は関連付け（ProgID）を持たないため、`HKCR\.cbz\ShellEx` ではなく
-  `SystemFileAssociations` 側を見ている可能性がある
-- ペインのハンドラ選択ドロップダウンに本ハンドラが出ていないことから、
-  列挙の段階で除外されている可能性がある
-
-### 次に試すこと
-
-1. `HKCU\Software\Classes\SystemFileAssociations\.cbz\ShellEx\{8895b1c6-...}` にも登録する
-2. `.cbz` に専用の ProgID を作り、その `ShellEx` に登録する
-3. プレビューペインのハンドラ選択ドロップダウンに表示されるか確認する
-   （表示されれば、選択で動作を確認できる）
-4. `Process Monitor` で Explorer がどの CLSID を問い合わせているか観察する
-5. 必要なら `IInitializeWithFile` も実装する（Explorer がファイルパスで
-   初期化しようとする経路に対応するため）
-
-### 設計上の注意（`.zip` の内蔵プレビューとの関係）
-
-Windows 11 は `.zip` に対して標準のプレビューを持っています。
-ZipScope のハンドラを既定にすると、**ユーザーが Windows 標準の動作を失う**可能性があります。
-Issue の要件にある「既存登録の無断上書きは避け、必要に応じてオプトイン方式を採用」に沿うなら、
-次のいずれかが妥当です。
-
-- 既定は Windows 標準のままにし、ペインのドロップダウンから ZipScope を選べるようにする
-- 設定で「ZipScope のプレビューを優先する」を選んだ場合だけ上書きする
-
-この判断は未決です。実装を進める前に方針を決める必要があります。
-
-## 実装中に見つけた不具合
-
-**WIC の遅延読み込みで解放済みメモリを参照していました。**
-サムネイルのバイト列をローカル変数に置いていたため、ループを抜けた時点で
-解放され、後から `CopyPixels` が解放済み領域を読んでいました
-（症状: 「Not a JPEG file」が並び、画像が表示されない）。
-
-対策として、展開したバイト列をキャッシュエントリ内に保持するようにしました。
-
-```cpp
-struct CachedThumb {
-    std::vector<BYTE> bytes;   // WIC が参照している間、生かしておく
-    ComPtr<IWICBitmapSource> source;
-    ...
-};
 ```
+HKCU\Software\Microsoft\Windows\CurrentVersion\PreviewHandlers
+    {6F1B2A12-8C3D-4E57-9A21-5B7C0D3E8F41} = ZipScope Preview Handler
+```
+
+PowerToys（Monaco / Markdown / SVG）も同じ場所に登録されています。ここを見れば
+「どのサードパーティ製ハンドラが有効か」が分かります。
+
+#### 2. サロゲートホストの AppID
+
+プレビューハンドラは `explorer.exe` ではなく **`prevhost.exe`** で動きます。
+そのため CLSID に、Windows が HKLM で定義している
+「Preview Handler Surrogate Host」の AppID を付ける必要があります。
+
+```
+HKCU\Software\Classes\CLSID\{6F1B2A12-...}
+    AppID = {6D2B5079-2F0B-48DD-AB7F-97CEC514D30B}
+```
+
+HKLM 側の対応する AppID キーには `DllSurrogate = %SystemRoot%\system32\prevhost.exe`
+が設定されています。自前の AppID を作って空の `DllSurrogate` を入れても動きません。
+
+### 診断方法
+
+Explorer の内側で何が起きているかは、DLL 側のログで確認できます。
+
+```powershell
+# トレースを有効にする（このファイルがある間だけ記録する）
+New-Item -ItemType File -Path "$env:LOCALAPPDATA\ZipScope\preview.debug" -Force
+
+# ファイルを選択してからログを見る
+Get-Content "$env:LOCALAPPDATA\ZipScope\preview.log"
+```
+
+出力例（`prevhost.exe` で動いていることが分かる）:
+
+```
+16:12:03.221 pid=40364 tid=8120 prevhost.exe DLL loaded
+16:12:03.222 pid=40364 tid=8120 prevhost.exe DllGetClassObject {6F1B2A12-...}
+16:12:03.223 pid=40364 tid=8120 prevhost.exe ClassFactory::CreateInstance
+16:12:03.225 pid=40364 tid=8120 prevhost.exe Initialize called
+16:12:03.226 pid=40364 tid=8120 prevhost.exe SetWindow called
+16:12:03.227 pid=40364 tid=8120 prevhost.exe DoPreview called
+16:12:03.227 pid=40364 tid=8120 prevhost.exe DoPreview indexed 8 entries
+```
+
+`prevhost.exe` に `ZipScopeShell.dll` が読み込まれているかは次でも確認できます。
+
+```powershell
+tasklist /m ZipScopeShell.dll
+```
+
+**`prevhost.exe` は `LOCALAPPDATA` を環境変数として持っていません。** ログのパス解決は
+`USERPROFILE` へのフォールバックが要ります（実装済み）。
+
+### 調査で分かった、効かなかったこと
+
+| 試したこと | 結果 |
+| --- | --- |
+| `HKCR\.zip\ShellEx\{8895b1c6}` のみ | 無視される |
+| `SystemFileAssociations\.zip\ShellEx` を追加 | 効果なし |
+| ProgID（`CompressedFolder`, `calibre64bit.AssocFile.CBZ`）の ShellEx を HKCU で上書き | 効果なし |
+| 自前の AppID + 空の `DllSurrogate` | 効果なし |
+| AppID を削除（インプロセス起動を期待） | 効果なし |
+| `SHChangeNotify(SHCNE_ASSOCCHANGED)` | 単体では効果なし（登録が揃ってから意味を持つ） |
+| `PreviewHandlers` 一覧 + システムのサロゲート AppID | **動作した** |
+
+## 設定（オプトイン）
+
+プレビュー統合は**拡張子ごとのオプトイン**です。インストール直後は無効で、
+設定画面のチェックボックスで有効にします。
+
+| 操作 | 場所 |
+| --- | --- |
+| 有効化・無効化 | ZipScope の設定 → 「エクスプローラーのプレビュー」 |
+| コマンドから | `zipscope-preview enable zip` / `disable cbz` / `status` |
+
+有効にすると、次回からは**ファイルを選択するだけ**で画像一覧が出ます
+（ドロップダウンでの毎回の選択は不要）。
+
+### 元の状態への復元
+
+有効化したとき、その拡張子に**以前登録されていたハンドラの CLSID を記憶**します
+（`HKCU\Software\ZipScope\preview-backup\.<ext>`）。無効化すると次を行います。
+
+1. 記憶した CLSID を元に戻す
+2. 元が空だった場合は、自分が作ったキーだけを削除する
+3. どの拡張子も無効になったら `PreviewHandlers` の項目を削除する
+4. バックアップを削除する
+
+**他のアプリが登録しているハンドラは削除しません。** バックアップが無い状態で
+無効化された場合も、登録値が ZipScope の CLSID のときだけ削除します。
+
+アンインストール（`regsvr32 /u` → `DllUnregisterServer`）でも同じ復元を行います。
+
+### Windows 標準の ZIP 機能への影響
+
+**ありません。** 触るのは `ShellEx\{8895b1c6-...}`（プレビュー専用のスロット）だけです。
+
+| 項目 | 場所 | 変化 |
+| --- | --- | --- |
+| ZIP の展開（すべて展開） | `CompressedFolder\ShellEx\ContextMenuHandlers` | 変更なし |
+| ドラッグ＆ドロップ | `CompressedFolder\ShellEx\DropHandler` | 変更なし |
+| 既定のアプリ | `.zip` の `UserChoice`（`CompressedFolder`） | 変更なし |
+| フォルダとして開く | `CompressedFolder` の StorageHandler | 変更なし |
+| サムネイル | `ShellEx\{E357FCCD-...}` | 変更なし |
+
+実機で `.zip` の「すべて展開」がツールバーに出たままであること、
+`UserChoice` が `CompressedFolder` のままであることを確認済みです。
+
+## 検証結果（2026-11-26）
+
+| 項目 | 結果 |
+| --- | --- |
+| CBZ 有効 → ペインに一覧 | **PASS**（Explorer 実機、`prevhost.exe` 上で動作） |
+| ZIP 無効 → Windows 標準のプレビュー | **PASS**（一覧は出ない） |
+| ZIP 有効 → ペインに一覧 | **PASS** |
+| 無効化で元に戻る | **PASS**（バックアップ・一覧項目ともに残らない） |
+| 二重有効化でバックアップが壊れない | **PASS**（`<absent>` を保持） |
+| `disable-all` でクリーンアップ | **PASS** |
+| Windows 標準の ZIP 展開 | **PASS**（未変更） |
+| 既存のサムネイル・右クリック | **PASS**（回帰なし） |
+
+## Microsoft Store（MSIX）版
+
+パッケージでは HKCU に書けないため、マニフェストで宣言します。
+
+```xml
+<uap:FileTypeAssociation Name="zipscope-zip">
+  <uap:SupportedFileTypes><uap:FileType>.zip</uap:FileType></uap:SupportedFileTypes>
+  <desktop2:ThumbnailHandler Clsid="6F1B2A10-..." />
+  <desktop2:DesktopPreviewHandler Clsid="6F1B2A12-..." />
+</uap:FileTypeAssociation>
+```
+
+```xml
+<com:SurrogateServer DisplayName="ZipScope Preview Handler"
+                     AppId="6F1B2A13-...">
+  <com:Class Id="6F1B2A12-..." Path="ZipScopeShell.dll" ThreadingModel="STA" />
+</com:SurrogateServer>
+```
+
+**Store 版はオプトインにできません。** マニフェストで宣言した時点で、
+インストール後に常に有効になります（パッケージの宣言はユーザーが個別に
+切り替えられない）。この違いは既知の制約として受け入れます。
+
+Store 版が有効な状態でも、Windows 標準の ZIP 展開には影響しません
+（同じくプレビュー専用スロットだけを使うため）。

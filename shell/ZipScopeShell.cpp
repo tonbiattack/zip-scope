@@ -1,4 +1,4 @@
-// ZipScope Shell Extension
+﻿// ZipScope Shell Extension
 //
 // An in-process COM server that gives Windows Explorer two things:
 //
@@ -27,6 +27,7 @@
 #include "zip_reader.h"
 #include "decode.h"
 #include "guids.h"
+#include "debuglog.h"
 #include "dllmain.h"
 #include "preview_handler.h"
 
@@ -296,6 +297,7 @@ public:
     IFACEMETHODIMP CreateInstance(IUnknown* outer, REFIID riid, void** ppv) override {
         if (ppv) *ppv = nullptr;
         if (outer) return CLASS_E_NOAGGREGATION;
+        Log("ClassFactory::CreateInstance");
         T* obj = new (std::nothrow) T();
         if (!obj) return E_OUTOFMEMORY;
         HRESULT hr = obj->QueryInterface(riid, ppv);
@@ -321,6 +323,13 @@ private:
 // ---------------------------------------------------------------------------
 
 STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, void** ppv) {
+    {
+        wchar_t g[64] = {};
+        StringFromGUID2(rclsid, g, 64);
+        char narrow[80] = {};
+        WideCharToMultiByte(CP_ACP, 0, g, -1, narrow, sizeof(narrow), nullptr, nullptr);
+        zipscope::Log("DllGetClassObject %s", narrow);
+    }
     if (!ppv) return E_POINTER;
     *ppv = nullptr;
     try {

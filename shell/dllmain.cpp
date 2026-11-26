@@ -4,6 +4,7 @@
 #include <shlwapi.h>
 #include <vector>
 
+#include "debuglog.h"
 #include "guids.h"
 
 #pragma comment(lib, "ole32.lib")
@@ -148,8 +149,13 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
         case DLL_PROCESS_ATTACH:
             zipscope::g_module = instance;
             DisableThreadLibraryCalls(instance);
+            // Tracing is off unless the marker file exists. Recording the load
+            // is what makes it possible to tell whether Explorer or prevhost
+            // ever picked the DLL up at all.
+            zipscope::Log("DLL loaded");
             break;
         case DLL_PROCESS_DETACH:
+            zipscope::Log("DLL unloaded");
             zipscope::g_module = nullptr;
             break;
         default:

@@ -15,6 +15,9 @@
 #include "preview_handler.h"
 
 #include <windowsx.h>
+#include <cstdarg>
+#include <cstdio>
+#include <cstring>
 #include <wincodec.h>
 #include <wrl/client.h>
 
@@ -23,6 +26,7 @@
 #include <vector>
 
 #include "decode.h"
+#include "debuglog.h"
 #include "dllmain.h"
 #include "guids.h"
 
@@ -403,6 +407,7 @@ LRESULT CALLBACK PreviewHandler::Impl::Proc(HWND hwnd, UINT msg, WPARAM wParam,
 
     switch (msg) {
         case WM_PAINT: {
+            Log("WM_PAINT loaded=%d count=%zu", (int)self->loaded, self->zipped.Count());
             PAINTSTRUCT ps = {};
             HDC dc = BeginPaint(hwnd, &ps);
             RECT rc = {};
@@ -541,6 +546,7 @@ IFACEMETHODIMP_(ULONG) PreviewHandler::Release() {
 }
 
 IFACEMETHODIMP PreviewHandler::Initialize(IStream* stream, DWORD) {
+    Log("Initialize called");
     if (!stream) return E_INVALIDARG;
     if (stream_) return E_UNEXPECTED;
     stream->AddRef();
@@ -549,6 +555,7 @@ IFACEMETHODIMP PreviewHandler::Initialize(IStream* stream, DWORD) {
 }
 
 IFACEMETHODIMP PreviewHandler::SetWindow(HWND hwnd, const RECT* prc) {
+    Log("SetWindow called");
     if (!hwnd || !prc) return E_INVALIDARG;
     parent_ = hwnd;
     rect_ = *prc;
@@ -601,6 +608,7 @@ IFACEMETHODIMP PreviewHandler::SetRect(const RECT* prc) {
 }
 
 IFACEMETHODIMP PreviewHandler::DoPreview() {
+    Log("DoPreview called");
     if (!stream_ || !impl_) return E_UNEXPECTED;
     if (previewing_) return S_OK;
     previewing_ = true;
@@ -631,6 +639,7 @@ IFACEMETHODIMP PreviewHandler::DoPreview() {
             impl_->loaded = true;
             impl_->truncated = impl_->zipped.Truncated();
             impl_->thumbs.resize(impl_->zipped.Count());
+            Log("DoPreview indexed %zu entries", impl_->zipped.Count());
         }
 
         impl_->Relayout();
@@ -645,6 +654,7 @@ IFACEMETHODIMP PreviewHandler::DoPreview() {
 }
 
 IFACEMETHODIMP PreviewHandler::Unload() {
+    Log("Unload called");
     previewing_ = false;
     if (impl_) {
         // Release the archive and every decoded thumbnail. Explorer keeps the

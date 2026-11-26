@@ -1,8 +1,9 @@
-// Thin wrapper over the Wails bindings. Every call goes through here so the
+﻿// Thin wrapper over the Wails bindings. Every call goes through here so the
 // rest of the UI never touches window.go directly, and so tests can substitute
 // a fake API.
 
 import type {
+  PreviewSetting,
   ArchiveDetail,
   ArchiveSummary,
   CacheStats,
@@ -14,6 +15,8 @@ import type {
   SettingsPatch,
   ZipScopeAPI,
 } from './types'
+
+export type { PreviewSetting }
 
 function api(): ZipScopeAPI {
   const a = window.go?.app?.App
@@ -34,6 +37,16 @@ export const backend = {
 
   updateSettings(patch: SettingsPatch): Promise<Settings> {
     return api().UpdateSettings(patch)
+  },
+
+  // Preview pane integration. It lives in the registry rather than in
+  // settings.json, so it has its own pair of calls.
+  getPreviewSettings(): Promise<PreviewSetting[]> {
+    return api().GetPreviewSettings()
+  },
+
+  setPreviewEnabled(ext: string, enabled: boolean): Promise<PreviewSetting[]> {
+    return api().SetPreviewEnabled(ext, enabled)
   },
 
   getCacheStats(): Promise<CacheStats> {

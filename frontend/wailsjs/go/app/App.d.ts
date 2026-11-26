@@ -18,6 +18,8 @@ export function ClearThumbnails():Promise<void>;
 
 export function DeleteArchiveToRecycleBin(arg1:number):Promise<app.OrganizeResult>;
 
+export function DisablePreviewAll():Promise<void>;
+
 export function EvictCache():Promise<number>;
 
 export function FullImage(arg1:number,arg2:number):Promise<app.ImageResponse>;
@@ -29,6 +31,8 @@ export function GetCacheStats():Promise<app.CacheStats>;
 export function GetOrganizeCapabilities():Promise<app.OrganizeCapabilities>;
 
 export function GetPrefetchStats():Promise<app.PrefetchStats>;
+
+export function GetPreviewSettings():Promise<Array<app.PreviewSetting>>;
 
 export function GetSettings():Promise<settings.Settings>;
 
@@ -53,6 +57,8 @@ export function RefreshArchive(arg1:string):Promise<app.ArchiveSummary>;
 export function RenameArchive(arg1:number,arg2:string):Promise<app.OrganizeResult>;
 
 export function RevealInExplorer(arg1:string):Promise<void>;
+
+export function SetPreviewEnabled(arg1:string,arg2:boolean):Promise<Array<app.PreviewSetting>>;
 
 export function SetStartupTarget(arg1:string):Promise<void>;
 

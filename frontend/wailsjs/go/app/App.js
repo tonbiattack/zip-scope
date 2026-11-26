@@ -30,6 +30,10 @@ export function DeleteArchiveToRecycleBin(arg1) {
   return window['go']['app']['App']['DeleteArchiveToRecycleBin'](arg1);
 }
 
+export function DisablePreviewAll() {
+  return window['go']['app']['App']['DisablePreviewAll']();
+}
+
 export function EvictCache() {
   return window['go']['app']['App']['EvictCache']();
 }
@@ -52,6 +56,10 @@ export function GetOrganizeCapabilities() {
 
 export function GetPrefetchStats() {
   return window['go']['app']['App']['GetPrefetchStats']();
+}
+
+export function GetPreviewSettings() {
+  return window['go']['app']['App']['GetPreviewSettings']();
 }
 
 export function GetSettings() {
@@ -100,6 +108,10 @@ export function RenameArchive(arg1, arg2) {
 
 export function RevealInExplorer(arg1) {
   return window['go']['app']['App']['RevealInExplorer'](arg1);
+}
+
+export function SetPreviewEnabled(arg1, arg2) {
+  return window['go']['app']['App']['SetPreviewEnabled'](arg1, arg2);
 }
 
 export function SetStartupTarget(arg1) {

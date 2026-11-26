@@ -225,6 +225,24 @@ export namespace app {
 		    return a;
 		}
 	}
+	export class PreviewSetting {
+	    ext: string;
+	    enabled: boolean;
+	    currentHandler: string;
+	    isZipScope: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new PreviewSetting(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ext = source["ext"];
+	        this.enabled = source["enabled"];
+	        this.currentHandler = source["currentHandler"];
+	        this.isZipScope = source["isZipScope"];
+	    }
+	}
 	export class SettingsPatch {
 	    root?: string;
 	    selectedArchive?: string;

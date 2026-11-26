@@ -1,6 +1,8 @@
-# Build output
+﻿# Build output
 build/bin/
 build/release/
+build/release-*/
+build/ZipScope-*.zip
 build/windows/*.syso
 
 # Frontend

@@ -43,12 +43,23 @@ $ErrorActionPreference = 'Stop'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Split-Path -Parent $scriptDir
 $msixDir = Join-Path $repoRoot 'build\msix'
-$msixPath = Join-Path $msixDir 'ZipScope_0.1.1.0_x64.msix'
+# Verify the newest package that has been built, so the script does not have to
+# be edited for every version bump.
+if (-not $msixPath) {
+    $candidate = Get-ChildItem $msixDir -Filter '*.msix' -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    if (-not $candidate) {
+        Write-Host "No .msix found under $msixDir." -ForegroundColor Red
+        exit 1
+    }
+    $msixPath = $candidate.FullName
+}
 $certPath = Join-Path $msixDir 'ZipScope-Test.cer'
 $wackReport = Join-Path $msixDir 'wack-report.xml'
 
 $packageName = 'tonbiattack.ZipScope'
-$packageFullName = 'tonbiattack.ZipScope_0.1.1.0_x64__e28ksxe3fc9w4'
+$packageFullName = ''
 $aumid = 'tonbiattack.ZipScope_e28ksxe3fc9w4!ZipScope'
 
 $results = [System.Collections.Generic.List[object]]::new()
@@ -71,7 +82,7 @@ Write-Host ""
 
 if (-not (Test-Path $msixPath)) {
     Write-Host "Package not found. Build it first:" -ForegroundColor Red
-    Write-Host "  pwsh -File `"$repoRoot\scripts\make-msix.ps1`" -Version 0.1.1.0 -Sign"
+    Write-Host "  pwsh -File `"$repoRoot\scripts\make-msix.ps1`" -Sign"
     exit 1
 }
 if (-not (Test-Path $certPath)) {
@@ -150,6 +161,7 @@ try {
     Add-AppxPackage -Path $msixPath -ErrorAction Stop
     $installed = $true
     $pkg = Get-AppxPackage -Name $packageName
+    $script:packageFullName = $pkg.PackageFullName
     Add-Result 'Install the package' $true "installed $($pkg.PackageFullName)"
 }
 catch {

@@ -63,8 +63,9 @@ pwsh scripts/make-msix.ps1 -Version 0.1.0.0
 | 展開検証 | `makeappx unpack` で全ファイルが揃うことを確認 |
 | サムネイルハンドラ | `desktop2:ThumbnailHandler` で宣言可能 |
 | 右クリックメニュー | `desktop9:FileExplorerClassicContextMenuHandler` で宣言可能 |
-| WebView2 | `uap10:HostRuntimeDependency` で依存を宣言可能 |
-| フルトラスト | `rescap:runFullTrust` + `rescap:broadFileSystemAccess` |
+| プレビューハンドラ | `desktop2:DesktopPreviewHandler` で宣言可能 |
+| WebView2 | `win32dependencies:ExternalDependency` で依存を宣言可能 |
+| フルトラスト | `rescap:runFullTrust` のみ |
 
 ## アーキテクチャ上の判断
 
@@ -77,9 +78,12 @@ Wails アプリは Win32 プロセスで、UWP サンドボックス内では動
 
 パッケージアプリは `HKEY_CLASSES_ROOT` に書き込めません。
 `com:SurrogateServer` で CLSID を宣言し、`desktop2:ThumbnailHandler` /
+`desktop2:DesktopPreviewHandler` /
 `desktop9:FileExplorerClassicContextMenuHandler` から参照します。
 
 **DLL 自体は変更不要**でした。既存の `IThumbnailProvider` / `IContextMenu` 実装をそのまま使えます。
+プレビューハンドラ（`IPreviewHandler`）も同じ DLL に追加し、
+サロゲートで起動するため `AppId` を付けて宣言しています。
 
 ### 右クリックメニューは従来方式（IContextMenu）を採用
 

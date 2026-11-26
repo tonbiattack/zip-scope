@@ -76,6 +76,44 @@ bool RegisterContextMenu() {
     return true;
 }
 
+// RegisterPreviewHandler wires the preview handler for .zip and .cbz.
+//
+// Preview handlers are registered under the extension's Shellex key, next to the
+// thumbnail provider. Two values matter to Windows:
+//
+//   (default)  the CLSID of the handler
+//   DisplayName  what the preview pane's dropdown shows
+//
+// And the handler's CLSID needs a "AppID" value pointing at an AppId key with
+// DllSurrogate set, because Explorer activates preview handlers in a surrogate
+// host rather than loading them into explorer.exe. Without DllSurrogate the
+// handler is listed but never runs.
+bool RegisterPreviewHandler() {
+    const wchar_t* exts[] = {L".zip", L".cbz"};
+    std::wstring clsid = ClsidToString(CLSID_ZipScopePreviewHandler);
+    std::wstring appId = ClsidToString(APPID_ZipScopePreviewHandler);
+
+    for (const wchar_t* ext : exts) {
+        std::wstring base = std::wstring(L"Software\\Classes\\") + ext +
+                            L"\\ShellEx\\{8895b1c6-b41f-4c1c-a562-0d564250836f}";
+        if (!SetKey(HKEY_CURRENT_USER, base, nullptr, clsid)) return false;
+        if (!SetKey(HKEY_CURRENT_USER, base, L"DisplayName", L"ZipScope")) return false;
+    }
+
+    // The AppID describes the surrogate Explorer launches for this handler.
+    std::wstring appBase = L"Software\\Classes\\AppID\\" + appId;
+    if (!SetKey(HKEY_CURRENT_USER, appBase, nullptr, L"ZipScope Preview Handler")) return false;
+    // An empty DllSurrogate means "use the system surrogate host", which is what
+    // a preview handler needs.
+    if (!SetKey(HKEY_CURRENT_USER, appBase, L"DllSurrogate", L"")) return false;
+
+    // The CLSID entry must reference the AppID.
+    std::wstring clsidBase = L"Software\\Classes\\CLSID\\" + clsid;
+    if (!SetKey(HKEY_CURRENT_USER, clsidBase, L"AppID", appId)) return false;
+
+    return true;
+}
+
 // RegisterComClass writes the CLSID entry that points at this DLL.
 bool RegisterComClass(REFCLSID clsid, const wchar_t* name, const std::wstring& dllPath) {
     std::wstring clsidStr = ClsidToString(clsid);
@@ -104,8 +142,13 @@ STDAPI DllRegisterServer() {
                                         L"ZipScope Context Menu", dll)) {
             return E_FAIL;
         }
+        if (!zipscope::RegisterComClass(CLSID_ZipScopePreviewHandler,
+                                        L"ZipScope Preview Handler", dll)) {
+            return E_FAIL;
+        }
         if (!zipscope::RegisterThumbnailHandler()) return E_FAIL;
         if (!zipscope::RegisterContextMenu()) return E_FAIL;
+        if (!zipscope::RegisterPreviewHandler()) return E_FAIL;
 
         // Tell Explorer that the thumbnail cache is stale.
         SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
@@ -123,6 +166,12 @@ STDAPI DllUnregisterServer() {
         zipscope::DeleteTree(HKEY_CURRENT_USER,
                              L"Software\\Classes\\CLSID\\" +
                                  zipscope::ClsidToString(CLSID_ZipScopeContextMenu));
+        zipscope::DeleteTree(HKEY_CURRENT_USER,
+                             L"Software\\Classes\\CLSID\\" +
+                                 zipscope::ClsidToString(CLSID_ZipScopePreviewHandler));
+        zipscope::DeleteTree(HKEY_CURRENT_USER,
+                             L"Software\\Classes\\AppID\\" +
+                                 zipscope::ClsidToString(APPID_ZipScopePreviewHandler));
 
         const wchar_t* exts[] = {L".zip", L".cbz"};
         for (const wchar_t* ext : exts) {
@@ -130,6 +179,10 @@ STDAPI DllUnregisterServer() {
                 HKEY_CURRENT_USER,
                 std::wstring(L"Software\\Classes\\") + ext +
                     L"\\ShellEx\\{E357FCCD-A995-4576-B01F-234630154E96}");
+            zipscope::DeleteTree(
+                HKEY_CURRENT_USER,
+                std::wstring(L"Software\\Classes\\") + ext +
+                    L"\\ShellEx\\{8895b1c6-b41f-4c1c-a562-0d564250836f}");
             // Older builds registered the menu handler per-extension; clean
             // that up so an upgrade does not leave a dead entry behind.
             zipscope::DeleteTree(

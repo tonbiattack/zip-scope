@@ -64,7 +64,8 @@ cl /nologo /c /EHsc /std:c++17 /O2 /W4 /WX- /utf-8 /DUNICODE /D_UNICODE ^
    "%SCRIPT_DIR%zip_reader.cpp" ^
    "%SCRIPT_DIR%decode.cpp" ^
    "%SCRIPT_DIR%inflate.cpp" ^
-   "%SCRIPT_DIR%register.cpp"
+   "%SCRIPT_DIR%register.cpp" ^
+   "%SCRIPT_DIR%preview_handler.cpp"
 if errorlevel 1 (
   echo ERROR: compilation failed.
   exit /b 1
@@ -88,6 +89,7 @@ link /nologo /DLL /OUT:"%OUT_DIR%\ZipScopeShell.dll" ^
      "%OBJ_DIR%\decode.obj" ^
      "%OBJ_DIR%\inflate.obj" ^
      "%OBJ_DIR%\register.obj" ^
+     "%OBJ_DIR%\preview_handler.obj" ^
      "%OBJ_DIR%\ZipScopeShell.res" ^
      shlwapi.lib ole32.lib oleaut32.lib uuid.lib windowscodecs.lib advapi32.lib shell32.lib user32.lib gdi32.lib
 if errorlevel 1 (

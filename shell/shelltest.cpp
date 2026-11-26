@@ -1,4 +1,4 @@
-// Standalone test harness for the shell extension's ZIP reader and inflater.
+﻿// Standalone test harness for the shell extension's ZIP reader and inflater.
 //
 // Explorer loads the extension in-process, so the parsing code is exercised
 // here against real archives before it ever runs inside explorer.exe. The
@@ -43,7 +43,8 @@ bool ReadFileBytes(const wchar_t* path, std::vector<BYTE>* out) {
     return ok && read == out->size();
 }
 
-// TestArchive verifies that the first image can be extracted and decoded.
+// TestArchive verifies that the archive can be indexed and its first image
+// extracted and decoded.
 void TestArchive(const wchar_t* path) {
     wprintf(L"\n%s\n", path);
     std::vector<BYTE> archive;
@@ -54,9 +55,25 @@ void TestArchive(const wchar_t* path) {
     }
     printf("  archive: %zu bytes\n", archive.size());
 
+    zipscope::ZipArchive zipped;
+    zipscope::ZipLimits limits;
+    if (!zipped.Index(archive, limits)) {
+        printf("  FAIL could not index the archive\n");
+        g_failures++;
+        return;
+    }
+    printf("  entries: %zu\n", zipped.Count());
+    Check(true, "archive indexed");
+
+    // The first image drives the file's thumbnail, so it must extract.
     std::vector<BYTE> image;
-    bool got = zipscope::ReadFirstImage(archive, 128ull * 1024 * 1024, 40ull * 1000 * 1000,
-                                        &image);
+    bool got = false;
+    for (size_t i = 0; i < zipped.Count(); i++) {
+        if (zipped.Extract(i, &image)) {
+            got = true;
+            break;
+        }
+    }
     Check(got, "first image extracted");
     if (!got) return;
     printf("  image: %zu bytes\n", image.size());
@@ -78,16 +95,16 @@ void TestArchive(const wchar_t* path) {
 
 // TestRejects verifies that a non-archive is rejected rather than crashing.
 void TestRejects(const wchar_t* path, const char* label) {
-    printf("\n%s (%s)\n", path, label);
+    printf("\n%ls (%s)\n", path, label);
     std::vector<BYTE> data;
     if (!ReadFileBytes(path, &data)) {
         printf("  (file missing, skipped)\n");
         return;
     }
-    std::vector<BYTE> image;
-    bool got = zipscope::ReadFirstImage(data, 128ull * 1024 * 1024, 40ull * 1000 * 1000,
-                                        &image);
-    Check(!got, "rejected without crashing");
+    zipscope::ZipArchive zipped;
+    zipscope::ZipLimits limits;
+    bool indexed = zipped.Index(data, limits);
+    Check(!indexed || zipped.Count() == 0, "rejected without crashing");
 }
 
 }  // namespace

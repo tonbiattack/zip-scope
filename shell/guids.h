@@ -12,6 +12,16 @@ DEFINE_GUID(CLSID_ZipScopeThumbnail,
 DEFINE_GUID(CLSID_ZipScopeContextMenu,
             0x6f1b2a11, 0x8c3d, 0x4e57, 0x9a, 0x21, 0x5b, 0x7c, 0x0d, 0x3e, 0x8f, 0x41);
 
+// {6F1B2A12-8C3D-4E57-9A21-5B7C0D3E8F41}
+DEFINE_GUID(CLSID_ZipScopePreviewHandler,
+            0x6f1b2a12, 0x8c3d, 0x4e57, 0x9a, 0x21, 0x5b, 0x7c, 0x0d, 0x3e, 0x8f, 0x41);
+
+// {6F1B2A13-8C3D-4E57-9A21-5B7C0D3E8F41}
+// The preview handler's AppID. Preview handlers registered by a package must
+// declare one so Explorer can activate them in the surrogate.
+DEFINE_GUID(APPID_ZipScopePreviewHandler,
+            0x6f1b2a13, 0x8c3d, 0x4e57, 0x9a, 0x21, 0x5b, 0x7c, 0x0d, 0x3e, 0x8f, 0x41);
+
 namespace zipscope {
 
 // Limits mirror the application's defaults so the extension can never do more

@@ -124,12 +124,19 @@ ZIP を選んでコマンドバーのボタン、または右クリックメニ�
 
 ## エクスプローラー統合
 
-`shell/` に COM のインプロセス DLL（`ZipScopeShell.dll`）があり、エクスプローラーに2つの機能を追加します。
+`shell/` に COM のインプロセス DLL（`ZipScopeShell.dll`）があり、エクスプローラーに3つの機能を追加します。
 
 | 機能 | 動作 |
 | --- | --- |
 | サムネイル | ZIP / CBZ のアイコンが、中の最初の画像（自然順先頭）になる |
 | 右クリック | 「ZipScopeで開く」でその ZIP を ZipScope で開く |
+| プレビュー | `Alt+P` のプレビューペインに、中の画像を一覧表示する |
+
+プレビューペインは **ZIP を全展開せず、表示に必要な画像だけを遅延読み込み** します。
+150 枚のアーカイブでも初期表示は約 23 ms、メモリ増分は 2〜3 MB です。
+詳細は [docs/PREVIEW-PANE.md](docs/PREVIEW-PANE.md) を参照してください。
+
+![Preview pane](docs/store/preview-01.png)
 
 ### インストール
 
@@ -176,11 +183,11 @@ Windows 10 では動作しません。MVP では両方の OS で動く `IContext
 
 ### 検証
 
-`shell/` には4つの検証ツールがあります。いずれも実際の Shell API を通すので、
+`shell/` には検証ツールが揃っています。いずれも実際の Shell API を通すので、
 登録ミスやプロバイダの不具合をエクスプローラーを開く前に検出できます。
 
 ```powershell
-# ZIP リーダーとデコーダ（DLL と同じソースをリンク）
+# ZIP リーダー・デコーダ・プレビューハンドラ（DLL と同じソースをリンク）
 shell\test.cmd path\to\book.zip
 
 # サムネイルプロバイダ（Shell 経由でサムネイルを取得）
@@ -191,6 +198,12 @@ build\shell\menutest.exe path\to\book.zip
 
 # 右クリックメニューからの起動（実際に ZipScope.exe が起動するか）
 build\shell\launchtest.exe path\to\book.zip
+
+# プレビューペイン（描画結果を PNG に保存して目視確認）
+build\shell\previewtest.exe path\to\book.cbz shot.png path\to\narrow.cbz path\to\notazip.zip
+
+# プレビューの初期表示時間とメモリ
+build\shell\previewbench.exe path\to\book.cbz
 ```
 
 ### ビューアの場所の解決

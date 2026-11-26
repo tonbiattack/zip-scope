@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <!--
   Package manifest for the Microsoft Store build of ZipScope.
 
@@ -10,6 +10,7 @@
   Two Explorer integrations are declared:
 
   - desktop2:ThumbnailHandler, so a ZIP/CBZ shows its first image.
+  - desktop2:DesktopPreviewHandler, so the preview pane lists its images.
   - desktop4:FileExplorerContextMenus, so "ZipScopeで開く" appears on the
     classic context menu.
 
@@ -132,6 +133,12 @@
                          Path="ZipScopeShell.dll"
                          ThreadingModel="STA" />
             </com:SurrogateServer>
+            <com:SurrogateServer DisplayName="ZipScope Preview Handler"
+                                 AppId="6F1B2A13-8C3D-4E57-9A21-5B7C0D3E8F41">
+              <com:Class Id="6F1B2A12-8C3D-4E57-9A21-5B7C0D3E8F41"
+                         Path="ZipScopeShell.dll"
+                         ThreadingModel="STA" />
+            </com:SurrogateServer>
           </com:ComServer>
         </com:Extension>
 
@@ -143,6 +150,7 @@
               <uap:FileType>.zip</uap:FileType>
             </uap:SupportedFileTypes>
             <desktop2:ThumbnailHandler Clsid="6F1B2A10-8C3D-4E57-9A21-5B7C0D3E8F41" />
+            <desktop2:DesktopPreviewHandler Clsid="6F1B2A12-8C3D-4E57-9A21-5B7C0D3E8F41" />
           </uap:FileTypeAssociation>
         </uap:Extension>
 
@@ -153,6 +161,7 @@
               <uap:FileType>.cbz</uap:FileType>
             </uap:SupportedFileTypes>
             <desktop2:ThumbnailHandler Clsid="6F1B2A10-8C3D-4E57-9A21-5B7C0D3E8F41" />
+            <desktop2:DesktopPreviewHandler Clsid="6F1B2A12-8C3D-4E57-9A21-5B7C0D3E8F41" />
           </uap:FileTypeAssociation>
         </uap:Extension>
 

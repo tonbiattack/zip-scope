@@ -1,11 +1,11 @@
-// Minimal ZIP central-directory reader.
+// Minimal ZIP central-directory reader, shared by the thumbnail provider and the
+// preview handler.
 #include "zip_reader.h"
 
 #include <algorithm>
 #include <cstring>
 
 #include "decode.h"
-#include "guids.h"
 
 namespace zipscope {
 
@@ -29,17 +29,6 @@ constexpr uint32_t kSigCentral = 0x02014b50;
 constexpr uint32_t kSigEnd = 0x06054b50;
 constexpr uint32_t kSigEnd64 = 0x06064b50;
 constexpr uint32_t kSigEnd64Locator = 0x07064b50;
-
-// Entry is one central-directory record.
-struct Entry {
-    std::string name;
-    uint16_t flags = 0;
-    uint16_t method = 0;
-    uint32_t crc = 0;
-    uint64_t compressedSize = 0;
-    uint64_t uncompressedSize = 0;
-    uint64_t localHeaderOffset = 0;
-};
 
 // IsImageName reports whether the entry has a supported image extension.
 bool IsImageName(const std::string& name) {
@@ -89,42 +78,16 @@ bool NaturalLess(const std::string& a, const std::string& b) {
 // inflate.cpp so the decoder lives in one place.
 bool InflateRaw(const BYTE* src, size_t srcLen, size_t expected, std::vector<BYTE>* out);
 
-bool ReadStreamToEnd(IStream* stream, size_t maxBytes, std::vector<BYTE>* out) {
-    if (!stream || !out) return false;
-    out->clear();
+bool ZipArchive::Index(const std::vector<BYTE>& bytes, const ZipLimits& limits) {
+    entries_.clear();
+    truncated_ = false;
+    limits_ = limits;
+    base_ = bytes.empty() ? nullptr : bytes.data();
+    size_ = bytes.size();
 
-    // Ask for the total size when the stream reports one; otherwise grow.
-    STATSTG stat = {};
-    ULONGLONG hint = 0;
-    if (SUCCEEDED(stream->Stat(&stat, STATFLAG_NONAME))) {
-        hint = stat.cbSize.QuadPart;
-        if (hint > maxBytes) return false;
-    }
-
-    const size_t chunk = 64 * 1024;
-    std::vector<BYTE> buf(chunk);
-    LARGE_INTEGER zero = {};
-    stream->Seek(zero, STREAM_SEEK_SET, nullptr);
-
-    for (;;) {
-        ULONG read = 0;
-        HRESULT hr = stream->Read(buf.data(), static_cast<ULONG>(buf.size()), &read);
-        if (hr != S_OK && hr != S_FALSE) return false;
-        if (read == 0) break;
-        if (out->size() + read > maxBytes) return false;
-        out->insert(out->end(), buf.begin(), buf.begin() + read);
-        if (hr == S_FALSE) break;
-    }
-    return !out->empty();
-}
-
-bool ReadFirstImage(const std::vector<BYTE>& archive, size_t maxEntryBytes,
-                    size_t maxPixels, std::vector<BYTE>* out) {
-    if (!out) return false;
-    out->clear();
-    const size_t n = archive.size();
-    if (n < 22) return false;
-    const BYTE* base = archive.data();
+    if (!base_ || size_ < 22) return false;
+    const BYTE* base = base_;
+    const size_t n = size_;
 
     // Locate the end-of-central-directory record by scanning backwards. The
     // comment field is at most 64 KiB, so the search window is bounded.
@@ -157,12 +120,11 @@ bool ReadFirstImage(const std::vector<BYTE>& archive, size_t maxEntryBytes,
     if (cdOffset > n || cdSize > n - cdOffset) return false;
 
     // Walk the central directory and collect image entries.
-    std::vector<Entry> images;
     size_t p = static_cast<size_t>(cdOffset);
     const size_t cdEnd = static_cast<size_t>(cdOffset + cdSize);
     for (uint64_t k = 0; k < entryCount && p + 46 <= cdEnd; k++) {
         if (Rd32(base + p) != kSigCentral) break;
-        Entry e;
+        ZipEntry e;
         e.flags = Rd16(base + p + 8);
         e.method = Rd16(base + p + 10);
         e.crc = Rd32(base + p + 16);
@@ -203,50 +165,90 @@ bool ReadFirstImage(const std::vector<BYTE>& archive, size_t maxEntryBytes,
             }
         }
 
-        if (IsImageName(e.name)) images.push_back(std::move(e));
+        if (IsImageName(e.name)) {
+            // The entry limit bounds memory and the listing, not just decoding:
+            // a ZIP with a million entries must not build a million-row index.
+            if (entries_.size() >= limits_.maxEntries) {
+                truncated_ = true;
+                break;
+            }
+            entries_.push_back(std::move(e));
+        }
         p += 46 + nameLen + extraLen + commentLen;
     }
 
-    if (images.empty()) return false;
+    if (entries_.empty()) return false;
 
     // Natural order, with the central-directory order as a stable tie-break.
-    std::stable_sort(images.begin(), images.end(),
-                     [](const Entry& a, const Entry& b) { return NaturalLess(a.name, b.name); });
+    std::stable_sort(entries_.begin(), entries_.end(),
+                     [](const ZipEntry& a, const ZipEntry& b) { return NaturalLess(a.name, b.name); });
+    return true;
+}
 
-    // Take the first entry that is actually readable. A broken first image
-    // should not hide a good second one.
-    for (const Entry& e : images) {
-        if (e.flags & 0x1) continue;                       // encrypted
-        if (e.method != 0 && e.method != 8) continue;      // store or deflate
-        if (e.uncompressedSize == 0 || e.uncompressedSize > maxEntryBytes) continue;
-        if (e.localHeaderOffset + 30 > n) continue;
-        if (Rd32(base + e.localHeaderOffset) != kSigLocal) continue;
+bool ZipArchive::Extract(size_t i, std::vector<BYTE>* out) const {
+    if (!out) return false;
+    out->clear();
+    if (i >= entries_.size() || !base_) return false;
 
-        uint16_t nameLen = Rd16(base + e.localHeaderOffset + 26);
-        uint16_t extraLen = Rd16(base + e.localHeaderOffset + 28);
-        size_t dataStart = static_cast<size_t>(e.localHeaderOffset) + 30 + nameLen + extraLen;
-        if (dataStart > n || e.compressedSize > n - dataStart) continue;
+    const ZipEntry& e = entries_[i];
+    if (!e.Decodable()) return false;
+    if (e.uncompressedSize > limits_.maxEntryBytes) return false;
+    if (e.localHeaderOffset + 30 > size_) return false;
+    if (Rd32(base_ + e.localHeaderOffset) != kSigLocal) return false;
 
-        const BYTE* src = base + dataStart;
-        std::vector<BYTE> data;
-        if (e.method == 0) {
-            data.assign(src, src + e.compressedSize);
-        } else if (!InflateRaw(src, static_cast<size_t>(e.compressedSize),
-                               static_cast<size_t>(e.uncompressedSize), &data)) {
-            continue;
-        }
-        if (data.size() != e.uncompressedSize) continue;
+    uint16_t nameLen = Rd16(base_ + e.localHeaderOffset + 26);
+    uint16_t extraLen = Rd16(base_ + e.localHeaderOffset + 28);
+    size_t dataStart = static_cast<size_t>(e.localHeaderOffset) + 30 + nameLen + extraLen;
+    if (dataStart > size_ || e.compressedSize > size_ - dataStart) return false;
 
-        // Verify the CRC so a corrupt entry is skipped rather than shown.
-        uint32_t crc = 0;
-        if (!ComputeCrc32(data.data(), data.size(), &crc) || crc != e.crc) continue;
-
-        if (!WithinPixelLimit(data, maxPixels)) continue;
-
-        *out = std::move(data);
-        return true;
+    const BYTE* src = base_ + dataStart;
+    std::vector<BYTE> data;
+    if (e.method == 0) {
+        data.assign(src, src + e.compressedSize);
     }
-    return false;
+    else if (!InflateRaw(src, static_cast<size_t>(e.compressedSize),
+                         static_cast<size_t>(e.uncompressedSize), &data)) {
+        return false;
+    }
+    if (data.size() != e.uncompressedSize) return false;
+
+    // Verify the CRC so a corrupt entry is skipped rather than shown.
+    uint32_t crc = 0;
+    if (!ComputeCrc32(data.data(), data.size(), &crc) || crc != e.crc) return false;
+
+    if (!WithinPixelLimit(data, limits_.maxPixels)) return false;
+
+    *out = std::move(data);
+    return true;
+}
+
+bool ReadStreamToEnd(IStream* stream, size_t maxBytes, std::vector<BYTE>* out) {
+    if (!stream || !out) return false;
+    out->clear();
+
+    // Ask for the total size when the stream reports one; otherwise grow.
+    STATSTG stat = {};
+    ULONGLONG hint = 0;
+    if (SUCCEEDED(stream->Stat(&stat, STATFLAG_NONAME))) {
+        hint = stat.cbSize.QuadPart;
+        if (hint > maxBytes) return false;
+    }
+
+    const size_t chunk = 64 * 1024;
+    std::vector<BYTE> buf(chunk);
+    LARGE_INTEGER zero = {};
+    stream->Seek(zero, STREAM_SEEK_SET, nullptr);
+
+    for (;;) {
+        ULONG read = 0;
+        HRESULT hr = stream->Read(buf.data(), static_cast<ULONG>(buf.size()), &read);
+        if (hr != S_OK && hr != S_FALSE) return false;
+        if (read == 0) break;
+        if (out->size() + read > maxBytes) return false;
+        out->insert(out->end(), buf.begin(), buf.begin() + read);
+        if (hr == S_FALSE) break;
+    }
+    return !out->empty();
 }
 
 }  // namespace zipscope

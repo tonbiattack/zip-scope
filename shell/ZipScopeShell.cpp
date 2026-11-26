@@ -28,6 +28,7 @@
 #include "decode.h"
 #include "guids.h"
 #include "dllmain.h"
+#include "preview_handler.h"
 
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "windowscodecs.lib")
@@ -109,12 +110,20 @@ public:
                 return E_FAIL;
             }
 
-            // Find the first image entry in natural order, which is the same
-            // representative image the application shows.
+            // Index the central directory and take the first image in natural
+            // order, which is the same representative image the application
+            // shows. A broken first entry falls through to the next one.
+            ZipArchive zipped;
+            ZipLimits limits;
+            limits.maxEntryBytes = kMaxEntryBytes;
+            limits.maxPixels = kMaxPixels;
+            if (!zipped.Index(archive, limits)) return E_FAIL;
+
             std::vector<BYTE> image;
-            if (!ReadFirstImage(archive, kMaxEntryBytes, kMaxPixels, &image)) {
-                return E_FAIL;
+            for (size_t i = 0; i < zipped.Count(); i++) {
+                if (zipped.Extract(i, &image)) break;
             }
+            if (image.empty()) return E_FAIL;
 
             // Decode and scale with WIC, which handles JPEG/PNG/GIF/WebP.
             HBITMAP bmp = nullptr;
@@ -324,6 +333,13 @@ STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, void** ppv) {
         }
         if (rclsid == CLSID_ZipScopeContextMenu) {
             auto* f = new (std::nothrow) zipscope::ClassFactory<zipscope::ContextMenu>();
+            if (!f) return E_OUTOFMEMORY;
+            HRESULT hr = f->QueryInterface(riid, ppv);
+            f->Release();
+            return hr;
+        }
+        if (rclsid == CLSID_ZipScopePreviewHandler) {
+            auto* f = new (std::nothrow) zipscope::ClassFactory<zipscope::PreviewHandler>();
             if (!f) return E_OUTOFMEMORY;
             HRESULT hr = f->QueryInterface(riid, ppv);
             f->Release();
